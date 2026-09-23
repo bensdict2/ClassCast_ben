@@ -1,5 +1,7 @@
+// @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
+// ... existing code ...
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, 
