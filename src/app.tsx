@@ -31,21 +31,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Utility to load PeerJS dynamically since we are in a React single-file environment
-const loadPeerJS = () => {
-  return new Promise((resolve, reject) => {
-    if (window.Peer) {
-      resolve(window.Peer);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js';
-    script.onload = () => resolve(window.Peer);
-    script.onerror = () => reject(new Error('Failed to load PeerJS'));
-    document.head.appendChild(script);
-  });
-};
-
 const generateRoomCode = () => {
   return Math.floor(10000 + Math.random() * 90000).toString(); // 5 digit code
 };
@@ -55,7 +40,6 @@ export default function App() {
   const [role, setRole] = useState(null); // 'select', 'teacher', 'student'
   const [roomCode, setRoomCode] = useState('');
   const [studentName, setStudentName] = useState('');
-  const [isPeerLoaded, setIsPeerLoaded] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
   // Check if the URL has the secret hash
@@ -77,13 +61,10 @@ export default function App() {
       setUser(currentUser);
     });
     
-    // Load PeerJS
-    loadPeerJS().then(() => setIsPeerLoaded(true)).catch(err => setErrorMsg(err.message));
-
     return () => unsubscribe();
   }, []);
 
-  if (!user || !isPeerLoaded) {
+  if (!user) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
         <div className="animate-pulse text-xl font-semibold text-blue-400">Loading Classroom Environment...</div>
@@ -166,127 +147,74 @@ export default function App() {
 }
 
 function TeacherView({ user, roomCode }) {
-  const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [answers, setAnswers] = useState([]);
-  const [studentCount, setStudentCount] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   
-  const videoRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const peerRef = useRef(null);
-  const connectionsRef = useRef({}); // Track active student connections
-
   // Form state for new question
   const [questionText, setQuestionText] = useState('');
   const [optionA, setOptionA] = useState('');
   const [optionB, setOptionB] = useState('');
 
-  const startBroadcast = async () => {
-    try {
-      // 1. Get Optimized Media Stream
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { max: 1280 },
-          height: { max: 720 },
-          frameRate: { max: 5 } // CRITICAL: Limits CPU and bandwidth for presentations
-        },
-        audio: false // No audio to save bandwidth, teacher speaks to the room natively
-      });
+  // Slide state (The Nearpod Architecture)
+  const [slideUrl, setSlideUrl] = useState('');
+  const [slideCaption, setSlideCaption] = useState('');
+  const [activeSlide, setActiveSlide] = useState(null);
 
-      localStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+  // Listen to answers and active slide when session is mounted
+  useEffect(() => {
+    const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+    const unsubscribeSession = onSnapshot(sessionRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setActiveSlide(data.currentSlide || null);
+        setActiveQuestion(data.activeQuestion || null);
       }
-      setIsBroadcasting(true);
-      setErrorMsg('');
+    });
 
-      // Listen for user manually stopping sharing via browser UI
-      stream.getVideoTracks()[0].onended = () => {
-        stopBroadcast();
-      };
+    const answersRef = collection(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers');
+    const unsubscribeAnswers = onSnapshot(answersRef, (snapshot) => {
+      const results = [];
+      snapshot.forEach(doc => results.push(doc.data()));
+      setAnswers(results);
+    }, (error) => {
+      console.error("Error fetching answers:", error);
+    });
 
-      // 2. Initialize PeerJS as the Host
-      const teacherPeerId = `classcast-${appId}-${roomCode}-host`;
-      const peer = new window.Peer(teacherPeerId);
-      peerRef.current = peer;
+    return () => {
+      unsubscribeSession();
+      unsubscribeAnswers();
+    };
+  }, [roomCode]);
 
-      peer.on('open', (id) => {
-        console.log('Teacher Peer ID opened:', id);
-      });
-
-      // 3. Handle incoming student requests
-      peer.on('connection', (conn) => {
-        conn.on('data', async (data) => {
-          if (data.type === 'request-stream') {
-             // A student connected and requested the stream. Call them with it.
-             const call = peer.call(conn.peer, localStreamRef.current);
-             
-             // TRACK CONNECTION FOR COUNT
-             connectionsRef.current[conn.peer] = call;
-             setStudentCount(Object.keys(connectionsRef.current).length);
-
-             call.on('close', () => {
-                 delete connectionsRef.current[conn.peer];
-                 setStudentCount(Object.keys(connectionsRef.current).length);
-             });
-
-             // CRITICAL: Throttle bandwidth to 300kbps per student to prevent network crash
-             try {
-                const sender = call.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-                if (sender) {
-                  const parameters = sender.getParameters();
-                  if (!parameters.encodings) {
-                    parameters.encodings = [{}];
-                  }
-                  parameters.encodings[0].maxBitrate = 300 * 1000; // 300 kbps
-                  await sender.setParameters(parameters);
-                }
-             } catch (err) {
-                console.warn("Could not apply bitrate constraints:", err);
-             }
-          }
-        });
-      });
-
-      peer.on('error', (err) => {
-        setErrorMsg("Peer connection error: " + err.message);
-        console.error(err);
-      });
-
+  const pushSlide = async () => {
+    if (!slideUrl && !slideCaption) {
+      setErrorMsg("Please provide an image URL or text to present.");
+      return;
+    }
+    setErrorMsg('');
+    
+    try {
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+      await setDoc(sessionRef, { 
+        currentSlide: { url: slideUrl, caption: slideCaption } 
+      }, { merge: true });
     } catch (err) {
-      setErrorMsg("Failed to start screen share. Please ensure permissions are granted.");
+      setErrorMsg("Failed to push slide.");
       console.error(err);
     }
   };
 
-  const stopBroadcast = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+  const clearSlide = async () => {
+    try {
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+      await setDoc(sessionRef, { currentSlide: null }, { merge: true });
+      setSlideUrl('');
+      setSlideCaption('');
+    } catch (err) {
+      console.error(err);
     }
-    if (peerRef.current) {
-      peerRef.current.destroy();
-    }
-    setIsBroadcasting(false);
-    setStudentCount(0);
-    connectionsRef.current = {};
   };
-
-  // Listen to answers when a question is active
-  useEffect(() => {
-    let unsubscribe = () => {};
-    if (activeQuestion) {
-      const answersRef = collection(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers');
-      unsubscribe = onSnapshot(answersRef, (snapshot) => {
-        const results = [];
-        snapshot.forEach(doc => results.push(doc.data()));
-        setAnswers(results);
-      }, (error) => {
-        console.error("Error fetching answers:", error);
-      });
-    }
-    return () => unsubscribe();
-  }, [activeQuestion, roomCode]);
 
   const pushQuestion = async () => {
     if (!questionText || !optionA || !optionB) {
@@ -326,17 +254,10 @@ function TeacherView({ user, roomCode }) {
     }
   };
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopBroadcast();
-    };
-  }, []);
-
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col md:flex-row gap-6 font-sans">
       
-      {/* Left Column: Stream & Controls */}
+      {/* Left Column: Slide Control & Preview */}
       <div className="flex-1 flex flex-col gap-6">
         <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex justify-between items-center">
           <div>
@@ -344,19 +265,9 @@ function TeacherView({ user, roomCode }) {
             <p className="text-slate-400">Class Code: <span className="text-emerald-400 font-mono text-xl tracking-wider ml-2">{roomCode}</span></p>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-lg border border-slate-700">
-              <div className={`w-3 h-3 rounded-full ${studentCount > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`}></div>
-              <span className="text-sm text-slate-300">{studentCount} Students Connected</span>
-            </div>
-            {!isBroadcasting ? (
-              <button onClick={startBroadcast} className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-colors shadow-lg">
-                Start Screen Share
-              </button>
-            ) : (
-              <button onClick={stopBroadcast} className="px-6 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-bold transition-colors shadow-lg">
-                Stop Sharing
-              </button>
-            )}
+             <div className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-xl border border-emerald-500/30 text-sm font-bold shadow-lg">
+               🚀 Sync Engine Active
+             </div>
           </div>
         </div>
 
@@ -366,26 +277,65 @@ function TeacherView({ user, roomCode }) {
           </div>
         )}
 
-        <div className="flex-1 bg-black rounded-2xl overflow-hidden border border-slate-700 shadow-2xl relative min-h-[400px]">
-          {!isBroadcasting && (
-            <div className="absolute inset-0 flex items-center justify-center text-slate-500">
-              Screen sharing is paused.
+        {/* Slide Control Panel */}
+        <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700">
+           <h3 className="text-xl font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2">Present a Slide</h3>
+           <div className="space-y-4">
+              <input 
+                type="text" 
+                placeholder="Image URL (e.g., https://example.com/map.jpg)" 
+                value={slideUrl}
+                onChange={(e) => setSlideUrl(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500"
+              />
+              <textarea 
+                placeholder="Type slide instructions or text..." 
+                value={slideCaption}
+                onChange={(e) => setSlideCaption(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 h-24 resize-none"
+              />
+              <div className="flex gap-4">
+                <button 
+                  onClick={pushSlide}
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all shadow-lg text-white active:scale-95"
+                >
+                  Sync to Devices
+                </button>
+                {activeSlide && (
+                  <button 
+                    onClick={clearSlide}
+                    className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all text-white border border-slate-600 active:scale-95"
+                  >
+                    Clear Screen
+                  </button>
+                )}
+              </div>
+           </div>
+        </div>
+
+        {/* Live Preview of what students see */}
+        <div className="flex-1 bg-black rounded-2xl overflow-hidden border border-slate-700 shadow-2xl relative min-h-[400px] flex items-center justify-center p-6">
+          {!activeSlide ? (
+            <div className="text-slate-500 text-center">
+              <p className="text-xl font-medium mb-2">Classroom screens are blank.</p>
+              <p className="text-sm">Push a slide or text above to sync to devices.</p>
+            </div>
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center text-center">
+               <div className="absolute top-4 left-4 bg-black/50 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-white/50 border border-white/10 uppercase tracking-widest">
+                 Live Preview
+               </div>
+               {activeSlide.url && <img src={activeSlide.url} alt="Slide Preview" className="max-h-[250px] object-contain rounded-lg mb-6 shadow-lg border border-slate-700" />}
+               {activeSlide.caption && <h2 className="text-3xl font-bold text-white">{activeSlide.caption}</h2>}
             </div>
           )}
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            muted 
-            className={`w-full h-full object-contain ${!isBroadcasting ? 'opacity-0' : 'opacity-100'}`}
-          />
         </div>
       </div>
 
-      {/* Right Column: Interaction Panel */}
+      {/* Right Column: Interaction Panel (Questions) */}
       <div className="w-full md:w-96 flex flex-col gap-6">
         <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700">
-          <h3 className="text-xl font-bold mb-4 text-emerald-400 border-b border-slate-700 pb-2">Push a Question</h3>
+          <h3 className="text-xl font-bold mb-4 text-emerald-400 border-b border-slate-700 pb-2">Pop Question</h3>
           
           {!activeQuestion ? (
             <div className="space-y-4">
@@ -411,9 +361,9 @@ function TeacherView({ user, roomCode }) {
               />
               <button 
                 onClick={pushQuestion}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold transition-all shadow-lg text-white"
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold transition-all shadow-lg text-white active:scale-95"
               >
-                Send to Devices
+                Launch Overlay
               </button>
             </div>
           ) : (
@@ -421,14 +371,14 @@ function TeacherView({ user, roomCode }) {
               <div className="bg-slate-900 p-4 rounded-xl border border-emerald-500/50 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-blue-500"></div>
                 <p className="font-semibold text-white mb-2">{activeQuestion.text}</p>
-                <div className="text-sm text-slate-400 flex gap-2">
-                  <span className="bg-slate-800 px-2 py-1 rounded">A: {activeQuestion.options[0]}</span>
-                  <span className="bg-slate-800 px-2 py-1 rounded">B: {activeQuestion.options[1]}</span>
+                <div className="text-sm text-slate-400 flex flex-col gap-2">
+                  <span className="bg-slate-800 px-3 py-2 rounded border border-slate-700">A: {activeQuestion.options[0]}</span>
+                  <span className="bg-slate-800 px-3 py-2 rounded border border-slate-700">B: {activeQuestion.options[1]}</span>
                 </div>
               </div>
               <button 
                 onClick={clearQuestion}
-                className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all text-white border border-slate-600"
+                className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all text-white border border-slate-600 active:scale-95"
               >
                 Close Question
               </button>
@@ -443,9 +393,9 @@ function TeacherView({ user, roomCode }) {
               <p className="text-slate-500 text-center mt-8 italic">No responses yet...</p>
             ) : (
               answers.map((ans, idx) => (
-                <div key={idx} className="bg-slate-900 p-3 rounded-lg border border-slate-700 flex justify-between items-center">
+                <div key={idx} className="bg-slate-900 p-3 rounded-lg border border-slate-700 flex justify-between items-center animate-fade-in">
                   <span className="font-medium text-slate-200">{ans.studentName}</span>
-                  <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full text-sm font-bold">
+                  <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full text-sm font-bold border border-blue-500/30">
                     {ans.selectedOption}
                   </span>
                 </div>
@@ -459,62 +409,10 @@ function TeacherView({ user, roomCode }) {
 }
 
 function StudentView({ user, roomCode, studentName }) {
-  const [isConnected, setIsConnected] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [activeQuestion, setActiveQuestion] = useState(null);
+  const [activeSlide, setActiveSlide] = useState(null);
   const [hasAnswered, setHasAnswered] = useState(false);
-  const videoRef = useRef(null);
-  const peerRef = useRef(null);
-
-  useEffect(() => {
-    // 1. Initialize Student Peer
-    const peer = new window.Peer();
-    peerRef.current = peer;
-    const teacherPeerId = `classcast-${appId}-${roomCode}-host`;
-
-    peer.on('open', (id) => {
-      // 2. Connect to teacher and request stream
-      const conn = peer.connect(teacherPeerId);
-      
-      conn.on('open', () => {
-        setIsConnected(true);
-        // Ask teacher for the video track
-        conn.send({ type: 'request-stream' });
-      });
-
-      conn.on('error', (err) => {
-        setErrorMsg("Connection to teacher lost.");
-        setIsConnected(false);
-      });
-    });
-
-    // 3. Receive call (stream) from teacher
-    peer.on('call', (call) => {
-      // Answer the call without sending our own stream (viewer only)
-      call.answer(); 
-      
-      call.on('stream', (remoteStream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = remoteStream;
-        }
-      });
-      
-      call.on('close', () => {
-         setIsConnected(false);
-         setErrorMsg("Teacher ended the presentation.");
-      });
-    });
-
-    peer.on('error', (err) => {
-      setErrorMsg("Failed to connect. Make sure the teacher is broadcasting.");
-      setIsConnected(false);
-      console.error(err);
-    });
-
-    return () => {
-      if (peerRef.current) peerRef.current.destroy();
-    };
-  }, [roomCode, appId]);
 
   useEffect(() => {
     const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
@@ -522,8 +420,12 @@ function StudentView({ user, roomCode, studentName }) {
     const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
+        
+        // Update the slide they are viewing
+        setActiveSlide(data.currentSlide || null);
+
+        // Update the question overlay
         if (data.activeQuestion) {
-          // If it's a new question, reset 'hasAnswered' state
           if (!activeQuestion || activeQuestion.id !== data.activeQuestion.id) {
             setHasAnswered(false);
           }
@@ -534,7 +436,8 @@ function StudentView({ user, roomCode, studentName }) {
         }
       }
     }, (error) => {
-      console.error("Error listening to questions:", error);
+      console.error("Error listening to session:", error);
+      setErrorMsg("Lost connection to classroom. Please refresh.");
     });
 
     return () => unsubscribe();
@@ -543,10 +446,9 @@ function StudentView({ user, roomCode, studentName }) {
   const submitAnswer = async (optionText) => {
     if (!activeQuestion) return;
     
-    setHasAnswered(true); // Optimistic UI update
+    setHasAnswered(true); 
     
     try {
-      // Write answer to a subcollection in the session
       const answerRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers', user.uid);
       await setDoc(answerRef, {
         studentName: studentName,
@@ -562,49 +464,57 @@ function StudentView({ user, roomCode, studentName }) {
   };
 
   return (
-    <div className="w-full h-screen bg-black relative flex flex-col font-sans overflow-hidden">
+    <div className="w-full h-screen bg-slate-900 relative flex flex-col font-sans overflow-hidden">
       
       {/* Header Bar */}
-      <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
+      <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-10 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg">
             {studentName.charAt(0).toUpperCase()}
           </div>
           <span className="text-white font-medium">{studentName}</span>
         </div>
-        <div className="flex items-center gap-2 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' : 'bg-red-500'}`}></div>
-          <span className="text-xs text-white/80 font-medium">
-            {isConnected ? `Connected to ${roomCode}` : 'Reconnecting...'}
-          </span>
+        <div className="flex items-center gap-2 bg-emerald-500/10 px-4 py-1.5 rounded-full border border-emerald-500/20 shadow-inner">
+          <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
+          <span className="text-xs text-emerald-300 font-bold tracking-widest uppercase">Synced</span>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-20 bg-red-600 text-white px-6 py-2 rounded-full shadow-lg text-sm whitespace-nowrap">
+        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-20 bg-red-600 text-white px-6 py-2 rounded-full shadow-lg text-sm whitespace-nowrap">
           {errorMsg}
         </div>
       )}
 
-      {/* Main Video Stream Player */}
-      <div className="flex-1 w-full h-full relative">
-         {!isConnected && !errorMsg && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-               <div className="w-12 h-12 border-4 border-slate-700 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-               <p className="text-slate-400 font-medium">Waiting for teacher's presentation...</p>
+      {/* Main Slide Viewer */}
+      <div className="flex-1 w-full h-full relative flex items-center justify-center p-8 mt-16">
+         {!activeSlide ? (
+            <div className="flex flex-col items-center justify-center text-center transition-all">
+               <div className="w-20 h-20 bg-slate-800 rounded-3xl flex items-center justify-center mb-6 shadow-xl border border-slate-700">
+                  <svg className="w-10 h-10 text-blue-500 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+               </div>
+               <h2 className="text-2xl font-bold text-white mb-2">Eyes on the board</h2>
+               <p className="text-slate-400 font-medium max-w-sm">Waiting for the teacher to push the next slide...</p>
+            </div>
+         ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-300">
+               {activeSlide.url && (
+                  <div className="relative mb-8 max-h-[60vh] w-full flex justify-center">
+                     <img src={activeSlide.url} alt="Presentation Slide" className="max-h-full object-contain rounded-2xl shadow-2xl border border-slate-700" />
+                  </div>
+               )}
+               {activeSlide.caption && (
+                  <h1 className="text-4xl md:text-5xl font-extrabold text-white text-center max-w-4xl leading-tight drop-shadow-lg">
+                    {activeSlide.caption}
+                  </h1>
+               )}
             </div>
          )}
-         <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            className="w-full h-full object-contain pointer-events-none"
-         />
       </div>
 
       {/* Interactive Overlay Modal (Pops up when teacher pushes a question) */}
       {activeQuestion && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-all duration-300">
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-all duration-300">
           <div className="bg-slate-800 rounded-3xl p-8 w-full max-w-lg shadow-2xl border border-slate-600 transform transition-all scale-100 opacity-100">
             <div className="text-center mb-8">
                <div className="inline-block bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-4 border border-blue-500/30">
@@ -631,7 +541,7 @@ function StudentView({ user, roomCode, studentName }) {
             ) : (
               <div className="text-center py-8">
                 <div className="w-16 h-16 bg-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_20px_rgba(16,185,129,0.4)]">
-                   <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                   <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                 </div>
                 <h3 className="text-xl font-bold text-white mb-2">Answer Submitted!</h3>
                 <p className="text-slate-400">Waiting for teacher to clear the screen...</p>
