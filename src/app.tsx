@@ -57,6 +57,9 @@ export default function App() {
   const [studentName, setStudentName] = useState('');
   const [isPeerLoaded, setIsPeerLoaded] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  
+  // Check if the URL has the secret hash
+  const isTeacherMode = window.location.hash === '#teacher';
 
   // Authenticate user before doing anything with Firestore
   useEffect(() => {
@@ -102,21 +105,27 @@ export default function App() {
           )}
 
           <div className="space-y-4">
-            <button 
-              onClick={() => {
-                setRoomCode(generateRoomCode());
-                setRole('teacher');
-              }}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-95"
-            >
-              Start as Teacher (Host)
-            </button>
             
-            <div className="relative flex py-2 items-center">
-              <div className="flex-grow border-t border-slate-600"></div>
-              <span className="flex-shrink-0 mx-4 text-slate-500 text-sm">or join class</span>
-              <div className="flex-grow border-t border-slate-600"></div>
-            </div>
+            {/* ONLY show the Teacher button if the URL ends in #teacher */}
+            {isTeacherMode && (
+              <>
+                <button 
+                  onClick={() => {
+                    setRoomCode(generateRoomCode());
+                    setRole('teacher');
+                  }}
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-95"
+                >
+                  Start as Teacher (Host)
+                </button>
+                
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-slate-600"></div>
+                  <span className="flex-shrink-0 mx-4 text-slate-500 text-sm">or join class</span>
+                  <div className="flex-grow border-t border-slate-600"></div>
+                </div>
+              </>
+            )}
 
             <input 
               type="text" 
