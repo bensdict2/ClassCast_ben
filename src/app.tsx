@@ -190,6 +190,12 @@ function TeacherView({ user, roomCode }) {
   const [optionA, setOptionA] = useState('');
   const [optionB, setOptionB] = useState('');
 
+  // New Refs for Screen Capture Sync
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const captureInterval = useRef(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+
   const openProjector = () => {
     const url = `${window.location.origin}${window.location.pathname}#projector-${roomCode}`;
     // Opens a clean popup window specifically for the second monitor
@@ -235,6 +241,53 @@ function TeacherView({ user, roomCode }) {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const startLiveCapture = async () => {
+    try {
+      // 1. Ask for permission to capture the screen
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { max: 854 }, height: { max: 480 }, frameRate: { max: 2 } }
+      });
+      
+      videoRef.current.srcObject = stream;
+      setIsCapturing(true);
+
+      // Stop capture if user clicks "Stop Sharing" on Chrome's built-in bar
+      stream.getVideoTracks()[0].onended = () => stopLiveCapture();
+
+      // 2. Every 2 seconds, take a picture and send it to the students!
+      captureInterval.current = setInterval(async () => {
+         if (videoRef.current && canvasRef.current) {
+            const canvas = canvasRef.current;
+            const context = canvas.getContext('2d');
+            canvas.width = 854;
+            canvas.height = 480;
+            
+            // Draw the current video frame onto the canvas
+            context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            
+            // Convert to a highly compressed JPEG (super small file size to prevent lag!)
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.4);
+            
+            // Push this picture to Firebase (Students will automatically download it)
+            const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+            await setDoc(sessionRef, { activeSlide: { url: dataUrl, timestamp: Date.now() } }, { merge: true });
+         }
+      }, 2000); // Takes a snapshot every 2000 milliseconds
+    } catch (err) {
+      setErrorMsg("Failed to start screen capture.");
+      console.error(err);
+    }
+  };
+
+  const stopLiveCapture = () => {
+    clearInterval(captureInterval.current);
+    if (videoRef.current && videoRef.current.srcObject) {
+       videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+    }
+    setIsCapturing(false);
+    clearSlide();
   };
 
   const pushQuestion = async () => {
@@ -320,14 +373,41 @@ function TeacherView({ user, roomCode }) {
               />
               <button 
                  onClick={pushSlide}
-                 className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all shadow-lg"
+                 className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all shadow-lg whitespace-nowrap"
               >
-                 Sync to Class
+                 Sync Link
               </button>
            </div>
 
+           <div className="relative flex py-2 items-center mb-6">
+              <div className="flex-grow border-t border-slate-700"></div>
+              <span className="flex-shrink-0 mx-4 text-slate-500 text-sm font-bold tracking-widest">OR AUTO-SYNC SCREEN</span>
+              <div className="flex-grow border-t border-slate-700"></div>
+           </div>
+
+           {!isCapturing ? (
+              <button 
+                 onClick={startLiveCapture}
+                 className="w-full py-4 mb-6 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center justify-center gap-2 text-lg"
+              >
+                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                 Start Live Screen Sync
+              </button>
+           ) : (
+              <button 
+                 onClick={stopLiveCapture}
+                 className="w-full py-4 mb-6 bg-red-600 hover:bg-red-500 rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(220,38,38,0.5)] flex items-center justify-center gap-2 animate-pulse text-lg"
+              >
+                 Stop Live Sync
+              </button>
+           )}
+
+           {/* Hidden video and canvas for the screen capturer */}
+           <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+           <canvas ref={canvasRef} className="hidden" />
+
            {/* Preview of what is currently on the student screens */}
-           <div className="flex-1 bg-black rounded-xl overflow-hidden border border-slate-700 relative flex items-center justify-center">
+           <div className="flex-1 bg-black rounded-xl overflow-hidden border border-slate-700 relative flex items-center justify-center min-h-[300px]">
               {activeSlide ? (
                  <>
                     <div className="absolute top-2 left-2 bg-black/60 px-3 py-1 rounded-md text-xs font-mono z-20 flex gap-2">
@@ -639,13 +719,13 @@ function ProjectorView({ roomCode }) {
             </div>
          ) : (
             <div className="w-full h-full flex flex-col items-center justify-center animate-in fade-in duration-300">
-               {/* Iframe Viewer locked down by Glass Shield */}
+               
+               {/* Iframe Viewer - GLASS SHIELD REMOVED FOR PROJECTOR! */}
                {activeSlide.url && parseMediaUrl(activeSlide.url)?.type === 'iframe' && (
                   <div className="relative w-full h-full flex justify-center bg-black overflow-hidden">
-                     <div className="absolute inset-0 z-10 w-full h-full"></div>
                      <iframe 
                        src={parseMediaUrl(activeSlide.url).src} 
-                       className="w-full h-full border-0 bg-black pointer-events-none" 
+                       className="w-full h-full border-0 bg-black" 
                        allowFullScreen
                      />
                   </div>
