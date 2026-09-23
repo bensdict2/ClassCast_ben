@@ -1,0 +1,26 @@
+{
+  "name": "vite-react-typescript-starter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "autoprefixer": "^10.6.1",
+    "firebase": "^12.19.0",
+    "peerjs": "^1.5.5",
+    "postcss": "^8.5.28",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwindcss": "^3.4.19"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
