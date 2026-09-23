@@ -38,8 +38,11 @@ const parseMediaUrl = (url, page = 1) => {
     
     // Google Slides Detection
     if (url.includes('docs.google.com/presentation')) {
-        const embedUrl = url.replace(/\/edit.*$/, `/embed?rm=minimal&slide=${page}`);
-        return { type: 'iframe', src: embedUrl };
+        const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        if (match && match[1]) {
+            const embedUrl = `https://docs.google.com/presentation/d/${match[1]}/embed?rm=minimal&slide=${page}`;
+            return { type: 'iframe', src: embedUrl };
+        }
     }
     
     // YouTube Detection
@@ -501,7 +504,7 @@ function StudentView({ user, roomCode, studentName }) {
   };
 
   return (
-    <div className="absolute inset-0 w-full h-full bg-black relative flex flex-col font-sans overflow-hidden">
+    <div className="fixed inset-0 w-full h-full bg-black flex flex-col font-sans overflow-hidden z-50">
       
       {/* Floating Header */}
       <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-20 bg-gradient-to-b from-black/90 via-black/60 to-transparent pointer-events-none">
@@ -608,7 +611,7 @@ function ProjectorView({ roomCode }) {
   }, [roomCode]);
 
   return (
-    <div className="absolute inset-0 w-full h-full bg-black relative flex flex-col font-sans overflow-hidden">
+    <div className="fixed inset-0 w-full h-full bg-black flex flex-col font-sans overflow-hidden z-50">
       
       {/* Floating Header - Only shows Join Code */}
       <div className="absolute top-6 right-6 z-20 pointer-events-none">
