@@ -146,6 +146,40 @@ export default function App() {
   );
 }
 
+// Helper to safely detect and format Google Slides, YouTube videos, and Images
+const parseMediaUrl = (url) => {
+  if (!url) return null;
+  
+  // Handle Google Slides
+  if (url.includes('docs.google.com/presentation/d/')) {
+    const match = url.match(/\/d\/(.*?)(\/|$)/);
+    if (match && match[1]) {
+       // Capture specific slide if you copy a link to slide 4, 5, etc.
+       let slideParam = '';
+       if (url.includes('#slide=')) {
+          slideParam = '&slide=' + url.split('#slide=')[1];
+       }
+       // rm=minimal hides the Google Slides bottom control bar for a cleaner look
+       return { type: 'iframe', src: `https://docs.google.com/presentation/d/${match[1]}/embed?rm=minimal${slideParam}` };
+    }
+  }
+  
+  // Handle YouTube Videos (Bonus feature!)
+  if (url.includes('youtube.com/watch?v=')) {
+     const videoId = url.split('v=')[1].split('&')[0];
+     return { type: 'iframe', src: `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0` };
+  }
+  
+  // Handle youtu.be short links
+  if (url.includes('youtu.be/')) {
+     const videoId = url.split('youtu.be/')[1].split('?')[0];
+     return { type: 'iframe', src: `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0` };
+  }
+  
+  // Default to treating it as an Image
+  return { type: 'image', src: url };
+};
+
 function TeacherView({ user, roomCode }) {
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [answers, setAnswers] = useState([]);
@@ -283,7 +317,7 @@ function TeacherView({ user, roomCode }) {
            <div className="space-y-4">
               <input 
                 type="text" 
-                placeholder="Image URL (e.g., https://example.com/map.jpg)" 
+                placeholder="Google Slides, YouTube, or Image URL..." 
                 value={slideUrl}
                 onChange={(e) => setSlideUrl(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500"
@@ -314,7 +348,7 @@ function TeacherView({ user, roomCode }) {
         </div>
 
         {/* Live Preview of what students see */}
-        <div className="flex-1 bg-black rounded-2xl overflow-hidden border border-slate-700 shadow-2xl relative min-h-[400px] flex items-center justify-center p-6">
+        <div className="flex-1 bg-black rounded-2xl overflow-hidden border border-slate-700 shadow-2xl relative min-h-[400px] flex flex-col items-center justify-center p-6">
           {!activeSlide ? (
             <div className="text-slate-500 text-center">
               <p className="text-xl font-medium mb-2">Classroom screens are blank.</p>
@@ -322,11 +356,22 @@ function TeacherView({ user, roomCode }) {
             </div>
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-center">
-               <div className="absolute top-4 left-4 bg-black/50 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-white/50 border border-white/10 uppercase tracking-widest">
+               <div className="absolute top-4 left-4 z-10 bg-black/50 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-white/50 border border-white/10 uppercase tracking-widest">
                  Live Preview
                </div>
-               {activeSlide.url && <img src={activeSlide.url} alt="Slide Preview" className="max-h-[250px] object-contain rounded-lg mb-6 shadow-lg border border-slate-700" />}
-               {activeSlide.caption && <h2 className="text-3xl font-bold text-white">{activeSlide.caption}</h2>}
+               
+               {activeSlide.url && parseMediaUrl(activeSlide.url)?.type === 'iframe' && (
+                 <iframe 
+                    src={parseMediaUrl(activeSlide.url).src} 
+                    className="w-full flex-1 min-h-[300px] border-0 rounded-lg shadow-lg bg-white" 
+                    allowFullScreen
+                 />
+               )}
+               {activeSlide.url && parseMediaUrl(activeSlide.url)?.type === 'image' && (
+                 <img src={parseMediaUrl(activeSlide.url).src} alt="Slide Preview" className="max-h-[250px] object-contain rounded-lg shadow-lg border border-slate-700" />
+               )}
+               
+               {activeSlide.caption && <h2 className="text-3xl font-bold text-white mt-6">{activeSlide.caption}</h2>}
             </div>
           )}
         </div>
@@ -498,13 +543,22 @@ function StudentView({ user, roomCode, studentName }) {
             </div>
          ) : (
             <div className="w-full h-full flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-300">
-               {activeSlide.url && (
+               {activeSlide.url && parseMediaUrl(activeSlide.url)?.type === 'iframe' && (
+                  <div className="relative mb-6 w-full max-w-5xl h-[65vh] flex justify-center bg-black rounded-2xl shadow-2xl border border-slate-700 overflow-hidden">
+                     <iframe 
+                       src={parseMediaUrl(activeSlide.url).src} 
+                       className="w-full h-full border-0 bg-white" 
+                       allowFullScreen
+                     />
+                  </div>
+               )}
+               {activeSlide.url && parseMediaUrl(activeSlide.url)?.type === 'image' && (
                   <div className="relative mb-8 max-h-[60vh] w-full flex justify-center">
-                     <img src={activeSlide.url} alt="Presentation Slide" className="max-h-full object-contain rounded-2xl shadow-2xl border border-slate-700" />
+                     <img src={parseMediaUrl(activeSlide.url).src} alt="Presentation Slide" className="max-h-full object-contain rounded-2xl shadow-2xl border border-slate-700" />
                   </div>
                )}
                {activeSlide.caption && (
-                  <h1 className="text-4xl md:text-5xl font-extrabold text-white text-center max-w-4xl leading-tight drop-shadow-lg">
+                  <h1 className="text-4xl md:text-5xl font-extrabold text-white text-center max-w-4xl leading-tight drop-shadow-lg mt-4">
                     {activeSlide.caption}
                   </h1>
                )}
