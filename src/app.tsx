@@ -616,7 +616,7 @@ function StudentView({ user, roomCode, studentName }) {
     <div className="fixed inset-0 w-full h-full bg-black flex flex-col font-sans overflow-hidden z-50">
       
       {/* Floating Header */}
-      <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-20 bg-gradient-to-b from-black/90 via-black/60 to-transparent pointer-events-none">
+      <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-40 bg-gradient-to-b from-black/90 via-black/60 to-transparent pointer-events-none">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center font-bold text-white shadow-lg border border-emerald-500/50">
             {studentName.charAt(0).toUpperCase()}
@@ -631,174 +631,185 @@ function StudentView({ user, roomCode, studentName }) {
         </div>
       </div>
 
-      {/* Main Presentation Layer */}
-      <div className="absolute inset-0 w-full h-full z-0 flex items-center justify-center">
-         {!activeSlide ? (
-            <div className="flex flex-col items-center justify-center scale-110">
-               <svg className="w-24 h-24 text-slate-700 mb-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-               <p className="text-slate-500 font-medium text-xl tracking-wide">Waiting for teacher's presentation...</p>
-            </div>
-         ) : (
-            <div className="w-full h-full bg-black">
-               {/* Invisible Glass Shield to block student clicks */}
-               {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
-                  <div className="absolute inset-0 z-10 w-full h-full cursor-not-allowed"></div>
-               )}
-               {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
-                  <iframe 
-                    src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
-                    className="w-full h-full border-0 bg-black pointer-events-none" 
-                    allowFullScreen
-                  />
-               )}
-               {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
-                  <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
-               )}
-            </div>
-         )}
-      </div>
-
-      {}
-      {activeQuestion && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-md transition-all duration-300 overflow-y-auto">
-          <div className="bg-slate-800 rounded-3xl p-6 sm:p-8 w-full max-w-2xl shadow-[0_0_40px_rgba(0,0,0,0.5)] border border-slate-600 relative overflow-hidden my-auto">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
-            
-            <div className="text-center mb-8 mt-2">
-               <div className="inline-block bg-orange-500/20 text-orange-400 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest mb-4 border border-orange-500/30">
-                 {activeQuestion.type === 'mcq' && 'Multiple Choice'}
-                 {activeQuestion.type === 'short_answer' && 'Short Answer'}
-                 {activeQuestion.type === 'thumbs' && 'Quick Poll'}
-                 {activeQuestion.type === 'temperature' && 'Temperature Check'}
-                 {activeQuestion.type === 'rank' && 'Rank Order'}
+      {/* Main Split Layout */}
+      <div className="flex-1 w-full h-full flex flex-col md:flex-row relative z-0">
+         
+         {/* Presentation Layer (Squeezes smoothly when sidebar opens) */}
+         <div className="flex-1 h-full relative bg-black flex items-center justify-center transition-all duration-500 overflow-hidden">
+            {!activeSlide ? (
+               <div className="flex flex-col items-center justify-center scale-110">
+                  <svg className="w-24 h-24 text-slate-700 mb-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                  <p className="text-slate-500 font-medium text-xl tracking-wide">Waiting for teacher's presentation...</p>
                </div>
-               <h2 className="text-2xl sm:text-3xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
-            </div>
-            
-            {!hasAnswered ? (
-              <div className="w-full">
-                
-                {/* 1. Multiple Choice UI */}
-                {activeQuestion.type === 'mcq' && (
-                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                     {activeQuestion.options.map((option, idx) => (
-                       <button
-                         key={idx}
-                         onClick={() => submitAnswer(option)}
-                         className="w-full py-5 px-6 bg-slate-700 hover:bg-orange-600 text-white text-lg sm:text-xl font-medium rounded-2xl transition-colors border border-slate-600 hover:border-orange-500 shadow-lg active:scale-95 text-left"
-                       >
-                         {option}
-                       </button>
-                     ))}
-                   </div>
-                )}
-
-                {/* 2. Short Answer UI */}
-                {activeQuestion.type === 'short_answer' && (
-                   <div className="flex flex-col gap-4">
-                      <textarea 
-                         placeholder="Type your answer here..."
-                         value={shortAnswerText}
-                         onChange={(e) => setShortAnswerText(e.target.value)}
-                         className="w-full bg-slate-900 border-2 border-slate-600 rounded-2xl p-4 text-white text-lg focus:outline-none focus:border-orange-500 h-32 resize-none"
-                      />
-                      <button 
-                         onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
-                         className={`w-full py-4 rounded-xl font-bold text-xl transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
-                      >
-                         Submit Answer
-                      </button>
-                   </div>
-                )}
-
-                {/* 3. Thumbs Up/Down UI */}
-                {activeQuestion.type === 'thumbs' && (
-                   <div className="flex gap-4 justify-center">
-                      <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-10 bg-slate-700 hover:bg-emerald-600 rounded-3xl border-2 border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-xl group">
-                         <div className="text-6xl mb-2 group-hover:scale-110 transition-transform">👍</div>
-                         <div className="text-white font-bold text-lg">Yes / Agree</div>
-                      </button>
-                      <button onClick={() => submitAnswer('👎 Thumbs Down')} className="flex-1 py-10 bg-slate-700 hover:bg-red-600 rounded-3xl border-2 border-slate-600 hover:border-red-500 transition-all active:scale-95 shadow-xl group">
-                         <div className="text-6xl mb-2 group-hover:scale-110 transition-transform">👎</div>
-                         <div className="text-white font-bold text-lg">No / Disagree</div>
-                      </button>
-                   </div>
-                )}
-
-                {/* 4. Temperature Check UI */}
-                {activeQuestion.type === 'temperature' && (
-                   <div className="flex flex-wrap justify-center gap-4">
-                      {[
-                        { e: '🥵', t: 'Overwhelmed' },
-                        { e: '😕', t: 'Confused' },
-                        { e: '😐', t: 'Neutral' },
-                        { e: '🙂', t: 'Getting It' },
-                        { e: '🤩', t: 'Mastered It' }
-                      ].map((item, idx) => (
-                        <button 
-                           key={idx} 
-                           onClick={() => submitAnswer(`${item.e} ${item.t}`)}
-                           className="flex flex-col items-center gap-2 p-4 bg-slate-700 hover:bg-orange-600 border border-slate-600 hover:border-orange-500 rounded-2xl transition-all active:scale-95 shadow-lg group w-28"
-                        >
-                           <div className="text-4xl group-hover:scale-125 transition-transform">{item.e}</div>
-                           <div className="text-white text-xs font-bold text-center leading-tight">{item.t}</div>
-                        </button>
-                      ))}
-                   </div>
-                )}
-
-                {/* 5. Rank Order UI */}
-                {activeQuestion.type === 'rank' && (
-                   <div className="flex flex-col gap-6">
-                      <p className="text-slate-300 text-center text-sm">Tap the items below in the correct order to build your list.</p>
-                      
-                      {/* Slots (Selected) */}
-                      <div className="flex flex-col gap-2 min-h-[100px] p-4 bg-slate-900 border-2 border-dashed border-slate-600 rounded-2xl">
-                         {rankOrder.length === 0 ? (
-                            <div className="text-slate-500 text-center italic my-auto">Your ranking will appear here...</div>
-                         ) : (
-                            rankOrder.map((opt, idx) => (
-                               <button key={idx} onClick={() => handleRankClick(opt)} className="bg-blue-600 text-white font-bold py-3 px-4 rounded-xl text-left flex gap-4 items-center shadow-md animate-in slide-in-from-bottom-2">
-                                  <span className="bg-black/30 w-8 h-8 rounded-full flex items-center justify-center text-sm">{idx + 1}</span>
-                                  {opt}
-                               </button>
-                            ))
-                         )}
-                      </div>
-
-                      {/* Pool (Unselected) */}
-                      <div className="flex flex-wrap gap-3 justify-center">
-                         {activeQuestion.options.filter(o => !rankOrder.includes(o)).map((opt, idx) => (
-                            <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-3 px-6 rounded-xl font-medium shadow-sm active:scale-95 transition-all">
-                               {opt}
-                            </button>
-                         ))}
-                      </div>
-
-                      {rankOrder.length === activeQuestion.options.length && (
-                         <button 
-                            onClick={() => submitAnswer(rankOrder)}
-                            className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xl transition-all shadow-lg active:scale-95 animate-in zoom-in"
-                         >
-                            Submit Final Order
-                         </button>
-                      )}
-                   </div>
-                )}
-
-              </div>
             ) : (
-              <div className="text-center py-10">
-                <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(16,185,129,0.4)] animate-in zoom-in">
-                   <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                </div>
-                <h3 className="text-2xl font-bold text-white mb-2">Answer Submitted!</h3>
-                <p className="text-slate-400 text-lg">Waiting for teacher to clear the screen...</p>
-              </div>
+               <div className="w-full h-full bg-black">
+                  {/* Invisible Glass Shield to block student clicks */}
+                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                     <div className="absolute inset-0 z-10 w-full h-full cursor-not-allowed"></div>
+                  )}
+                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                     <iframe 
+                       src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
+                       className="w-full h-full border-0 bg-black pointer-events-none" 
+                       allowFullScreen
+                     />
+                  )}
+                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
+                     <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
+                  )}
+               </div>
             )}
-          </div>
-        </div>
-      )}
+         </div>
+
+         {/* Responsive Sidebar (Slides in on right for Desktop, bottom for Mobile) */}
+         <div 
+           className={`bg-slate-800 shadow-[-20px_0_40px_rgba(0,0,0,0.6)] flex flex-col transition-all duration-500 ease-in-out relative z-30 overflow-hidden
+           ${activeQuestion ? 'h-[55%] md:h-full w-full md:w-[420px] border-t md:border-t-0 md:border-l border-orange-500/50' : 'h-0 md:h-full w-full md:w-0 border-none'}`}
+         >
+            <div className="w-full md:w-[420px] h-full overflow-y-auto relative p-6 pt-16 md:pt-24 flex flex-col">
+               {activeQuestion && (
+                  <>
+                     <div className="absolute top-0 left-0 w-full h-1 md:h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
+                     
+                     {/* Sidebar Title Area */}
+                     <div className="text-center mb-6">
+                        <div className="inline-block bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest mb-3 border border-orange-500/30 shadow-sm">
+                          {activeQuestion.type === 'mcq' && 'Multiple Choice'}
+                          {activeQuestion.type === 'short_answer' && 'Short Answer'}
+                          {activeQuestion.type === 'thumbs' && 'Quick Poll'}
+                          {activeQuestion.type === 'temperature' && 'Temperature Check'}
+                          {activeQuestion.type === 'rank' && 'Rank Order'}
+                        </div>
+                        <h2 className="text-xl sm:text-2xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
+                     </div>
+                     
+                     {/* Answer Options Area (Scaled perfectly for Sidebar) */}
+                     {!hasAnswered ? (
+                       <div className="w-full flex-1 flex flex-col justify-center">
+                         
+                         {/* 1. Multiple Choice */}
+                         {activeQuestion.type === 'mcq' && (
+                            <div className="grid grid-cols-1 gap-3">
+                              {activeQuestion.options.map((option, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() => submitAnswer(option)}
+                                  className="w-full py-4 px-5 bg-slate-700 hover:bg-orange-600 text-white text-lg font-medium rounded-xl transition-all border border-slate-600 hover:border-orange-500 shadow-lg active:scale-95 text-left flex items-center justify-between group"
+                                >
+                                  <span>{option}</span>
+                                  <div className="w-5 h-5 rounded-full border-2 border-slate-500 group-hover:border-white opacity-50 group-hover:opacity-100 flex-shrink-0 ml-3"></div>
+                                </button>
+                              ))}
+                            </div>
+                         )}
+
+                         {/* 2. Short Answer */}
+                         {activeQuestion.type === 'short_answer' && (
+                            <div className="flex flex-col gap-4">
+                               <textarea 
+                                  placeholder="Type your answer here..."
+                                  value={shortAnswerText}
+                                  onChange={(e) => setShortAnswerText(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white text-base focus:outline-none focus:border-orange-500 h-28 resize-none shadow-inner"
+                               />
+                               <button 
+                                  onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
+                                  className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
+                               >
+                                  Submit Answer
+                               </button>
+                            </div>
+                         )}
+
+                         {/* 3. Thumbs Up/Down */}
+                         {activeQuestion.type === 'thumbs' && (
+                            <div className="flex gap-3 justify-center">
+                               <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-8 bg-slate-700 hover:bg-emerald-600 rounded-2xl border border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-lg group">
+                                  <div className="text-5xl mb-2 group-hover:scale-110 transition-transform">👍</div>
+                                  <div className="text-white font-bold text-sm">Agree</div>
+                               </button>
+                               <button onClick={() => submitAnswer('👎 Thumbs Down')} className="flex-1 py-8 bg-slate-700 hover:bg-red-600 rounded-2xl border border-slate-600 hover:border-red-500 transition-all active:scale-95 shadow-lg group">
+                                  <div className="text-5xl mb-2 group-hover:scale-110 transition-transform">👎</div>
+                                  <div className="text-white font-bold text-sm">Disagree</div>
+                               </button>
+                            </div>
+                         )}
+
+                         {/* 4. Temperature Check */}
+                         {activeQuestion.type === 'temperature' && (
+                            <div className="grid grid-cols-2 gap-3">
+                               {[
+                                 { e: '🥵', t: 'Overwhelmed' },
+                                 { e: '😕', t: 'Confused' },
+                                 { e: '😐', t: 'Neutral' },
+                                 { e: '🙂', t: 'Getting It' },
+                                 { e: '🤩', t: 'Mastered It' }
+                               ].map((item, idx) => (
+                                 <button 
+                                    key={idx} 
+                                    onClick={() => submitAnswer(`${item.e} ${item.t}`)}
+                                    className={`flex flex-col items-center gap-1 p-3 bg-slate-700 hover:bg-orange-600 border border-slate-600 hover:border-orange-500 rounded-xl transition-all active:scale-95 shadow-md group ${idx === 4 ? 'col-span-2' : ''}`}
+                                 >
+                                    <div className="text-3xl group-hover:scale-125 transition-transform">{item.e}</div>
+                                    <div className="text-white text-[11px] font-bold text-center uppercase tracking-wider">{item.t}</div>
+                                 </button>
+                               ))}
+                            </div>
+                         )}
+
+                         {/* 5. Rank Order */}
+                         {activeQuestion.type === 'rank' && (
+                            <div className="flex flex-col gap-4">
+                               <p className="text-slate-400 text-center text-xs">Tap items to rank them</p>
+                               
+                               {/* Slots (Selected) */}
+                               <div className="flex flex-col gap-2 min-h-[80px] p-3 bg-slate-900 border border-dashed border-slate-600 rounded-xl">
+                                  {rankOrder.length === 0 ? (
+                                     <div className="text-slate-500 text-center italic text-sm my-auto">Ranking order...</div>
+                                  ) : (
+                                     rankOrder.map((opt, idx) => (
+                                        <button key={idx} onClick={() => handleRankClick(opt)} className="bg-blue-600 text-white font-semibold py-2 px-3 rounded-lg text-left flex gap-3 items-center shadow-md animate-in slide-in-from-bottom-2 text-sm">
+                                           <span className="bg-black/30 w-6 h-6 rounded-md flex items-center justify-center text-xs">{idx + 1}</span>
+                                           <span className="flex-1 truncate">{opt}</span>
+                                        </button>
+                                     ))
+                                  )}
+                               </div>
+
+                               {/* Pool (Unselected) */}
+                               <div className="flex flex-wrap gap-2 justify-center">
+                                  {activeQuestion.options.filter(o => !rankOrder.includes(o)).map((opt, idx) => (
+                                     <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-2 px-3 rounded-lg font-medium shadow-sm active:scale-95 transition-all text-sm">
+                                        {opt}
+                                     </button>
+                                  ))}
+                               </div>
+
+                               {rankOrder.length === activeQuestion.options.length && (
+                                  <button 
+                                     onClick={() => submitAnswer(rankOrder)}
+                                     className="w-full py-3 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-lg transition-all shadow-lg active:scale-95 animate-in zoom-in"
+                                  >
+                                     Submit Order
+                                  </button>
+                               )}
+                            </div>
+                         )}
+                       </div>
+                     ) : (
+                       <div className="text-center py-10 my-auto">
+                         <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.2)] animate-in zoom-in">
+                            <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                         </div>
+                         <h3 className="text-xl font-bold text-emerald-400 mb-2">Submitted!</h3>
+                         <p className="text-slate-400 text-sm">Look up at the board...</p>
+                       </div>
+                     )}
+                  </>
+               )}
+            </div>
+         </div>
+      </div>
     </div>
   );
 }
