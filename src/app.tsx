@@ -225,6 +225,28 @@ function TeacherView({ roomCode }) {
     };
   }, [activeQuestion, roomCode]);
 
+  // Listen for physical presentation clickers (Page Up/Down, Arrows, Space)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Do not trigger if the teacher is typing a question in a text box!
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      
+      // Do not trigger if there is no active presentation running
+      if (!activeSlide) return;
+
+      if (['ArrowRight', 'PageDown', ' '].includes(e.key)) {
+        e.preventDefault(); // Stop the webpage from scrolling down
+        changePage(1);
+      } else if (['ArrowLeft', 'PageUp'].includes(e.key)) {
+        e.preventDefault();
+        changePage(-1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeSlide, roomCode]);
+
   const pushSlide = async () => {
     if (!slideUrl) return;
     try {
