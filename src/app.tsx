@@ -11,7 +11,6 @@ import {
 
 const appId = 'my-classroom-app'; 
 
-// Splitting the API key bypasses overly-strict security scanners on Netlify
 const API_KEY_PART_1 = "AIzaSyAUgrP14-";
 const API_KEY_PART_2 = "UcSZe-cn4kstkIVW5CfIhOkXA";
 
@@ -30,13 +29,13 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 const generateRoomCode = () => {
-  return Math.floor(10000 + Math.random() * 90000).toString(); // 5 digit code
+  return Math.floor(10000 + Math.random() * 90000).toString(); 
 };
 
 const parseMediaUrl = (url, page = 1) => {
     if (!url) return null;
     
-    // Google Slides Detection
+    // Google Slides Detection (Extracted Presentation ID)
     if (url.includes('docs.google.com/presentation')) {
         const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
         if (match && match[1]) {
@@ -56,7 +55,6 @@ const parseMediaUrl = (url, page = 1) => {
         return { type: 'iframe', src: `https://www.youtube.com/embed/${videoId}?autoplay=1` };
     }
 
-    // Default to Image
     return { type: 'image', src: url };
 };
 
@@ -68,7 +66,6 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isTeacherLink, setIsTeacherLink] = useState(false);
 
-  // Check if this is the Projector Window
   const urlParams = new URLSearchParams(window.location.search);
   const isProjector = urlParams.get('projector') === 'true';
   const projCode = urlParams.get('code');
@@ -88,7 +85,6 @@ export default function App() {
       setUser(currentUser);
     });
     
-    // Check for the secret "#teacher" link to reveal the host button
     if (window.location.hash === '#teacher') {
         setIsTeacherLink(true);
     }
@@ -104,7 +100,6 @@ export default function App() {
     );
   }
 
-  // Route to Projector View instantly if URL params dictate
   if (isProjector && projCode) {
       return <ProjectorView roomCode={projCode} />;
   }
@@ -185,32 +180,49 @@ export default function App() {
 }
 
 function TeacherView({ roomCode }) {
+  // Slide State
   const [slideUrl, setSlideUrl] = useState('');
   const [activeSlide, setActiveSlide] = useState(null);
   
+  // Question State & Bank
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [answers, setAnswers] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
+  const [questionBank, setQuestionBank] = useState([]);
   
-  const [questionText, setQuestionText] = useState('');
-  const [optionA, setOptionA] = useState('');
-  const [optionB, setOptionB] = useState('');
+  // Question Builder Form
+  const [qType, setQType] = useState('mcq');
+  const [qText, setQText] = useState('');
+  const [qOptions, setQOptions] = useState(['', '']);
 
   const openProjector = () => {
      window.open(`/?projector=true&code=${roomCode}`, 'ClassCastProjector', 'width=1280,height=720');
   };
 
+  // Sync Answers and Question Bank from Firebase
   useEffect(() => {
-    let unsubscribe = () => {};
+    const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+    const unsubscribeSession = onSnapshot(sessionRef, (docSnap) => {
+       if (docSnap.exists()) {
+           const data = docSnap.data();
+           setQuestionBank(data.bank || []);
+       }
+    });
+
+    let unsubscribeAnswers = () => {};
     if (activeQuestion) {
       const answersRef = collection(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers');
-      unsubscribe = onSnapshot(answersRef, (snapshot) => {
+      unsubscribeAnswers = onSnapshot(answersRef, (snapshot) => {
         const results = [];
         snapshot.forEach(doc => results.push(doc.data()));
         setAnswers(results);
       }, (error) => console.error("Error fetching answers:", error));
     }
-    return () => unsubscribe();
+    
+    return () => {
+        unsubscribeSession();
+        unsubscribeAnswers();
+    };
   }, [activeQuestion, roomCode]);
 
   const pushSlide = async () => {
@@ -248,26 +260,57 @@ function TeacherView({ roomCode }) {
     } catch (err) {}
   };
 
-  const pushQuestion = async () => {
-    if (!questionText || !optionA || !optionB) {
-      setErrorMsg("Please fill out the question and both options.");
-      return;
-    }
-    setErrorMsg('');
-    const questionObj = {
-      id: Date.now().toString(),
-      text: questionText,
-      options: [optionA, optionB],
-      timestamp: Date.now()
-    };
+  const updateOption = (index, value) => {
+      const newOptions = [...qOptions];
+      newOptions[index] = value;
+      setQOptions(newOptions);
+  };
 
+  const addOption = () => setQOptions([...qOptions, '']);
+  const removeOption = (index) => setQOptions(qOptions.filter((_, i) => i !== index));
+
+  const saveToBank = async () => {
+      if (!qText.trim()) {
+          setErrorMsg("Question text cannot be empty.");
+          return;
+      }
+      if ((qType === 'mcq' || qType === 'rank') && qOptions.some(o => !o.trim())) {
+          setErrorMsg("Please fill out all options or remove empty ones.");
+          return;
+      }
+
+      const newQuestion = {
+          id: Date.now().toString(),
+          type: qType,
+          text: qText,
+          options: (qType === 'mcq' || qType === 'rank') ? qOptions.filter(o => o.trim()) : [],
+      };
+
+      try {
+          const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+          await setDoc(sessionRef, { bank: [...questionBank, newQuestion] }, { merge: true });
+          setQText('');
+          setQOptions(['', '']);
+          setErrorMsg('');
+      } catch (err) {
+          setErrorMsg("Failed to save to bank.");
+      }
+  };
+
+  const deleteFromBank = async (qId) => {
+      const newBank = questionBank.filter(q => q.id !== qId);
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+      await setDoc(sessionRef, { bank: newBank }, { merge: true });
+  };
+
+  const launchQuestion = async (questionObj) => {
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
       await setDoc(sessionRef, { activeQuestion: questionObj }, { merge: true });
       setActiveQuestion(questionObj);
-      setAnswers([]);
+      setAnswers([]); // Reset answers locally when launching new question
     } catch (err) {
-      setErrorMsg("Failed to send question to Firebase.");
+      setErrorMsg("Failed to send question to class.");
     }
   };
 
@@ -276,12 +319,13 @@ function TeacherView({ roomCode }) {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
       await setDoc(sessionRef, { activeQuestion: null }, { merge: true });
       setActiveQuestion(null);
-      setQuestionText(''); setOptionA(''); setOptionB('');
     } catch (err) {}
   };
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col md:flex-row gap-6 font-sans">
+      
+      {/* Left Column: Presentation & Control */}
       <div className="flex-1 flex flex-col gap-6">
         <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex justify-between items-center relative overflow-hidden">
           <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
@@ -293,7 +337,7 @@ function TeacherView({ roomCode }) {
           </div>
           <button 
              onClick={openProjector} 
-             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2"
+             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 active:scale-95"
           >
              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
              Launch Projector
@@ -306,11 +350,11 @@ function TeacherView({ roomCode }) {
           </div>
         )}
 
-        {/* Presentation Control Panel */}
+        {/* Presentation Deck */}
         <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex flex-col gap-4 flex-1">
            <h3 className="text-xl font-bold text-slate-100 border-b border-slate-700 pb-3 flex items-center gap-2">
               <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-              Zero-Lag Presentation Deck
+              Cloud Presentation Sync
            </h3>
            
            <div className="flex gap-2">
@@ -373,83 +417,136 @@ function TeacherView({ roomCode }) {
       </div>
 
       {}
-      <div className="w-full md:w-96 flex flex-col gap-6">
-        <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-400 to-pink-500"></div>
-          <h3 className="text-xl font-bold mb-4 text-orange-400 border-b border-slate-700 pb-2 flex items-center gap-2">
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-             Pop Question
-          </h3>
-          
-          {!activeQuestion ? (
-            <div className="space-y-4">
-              <textarea 
-                placeholder="Type a question for the class..." 
-                value={questionText}
-                onChange={(e) => setQuestionText(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-orange-500 h-24 resize-none"
-              />
-              <input 
-                type="text" 
-                placeholder="Option A" 
-                value={optionA}
-                onChange={(e) => setOptionA(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-orange-500"
-              />
-              <input 
-                type="text" 
-                placeholder="Option B" 
-                value={optionB}
-                onChange={(e) => setOptionB(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-orange-500"
-              />
-              <button 
-                onClick={pushQuestion}
-                className="w-full py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-bold transition-all shadow-lg text-white active:scale-95"
-              >
-                Send to Devices
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="bg-slate-900 p-4 rounded-xl border border-orange-500/50 relative overflow-hidden shadow-inner">
-                <p className="font-semibold text-white mb-2">{activeQuestion.text}</p>
-                <div className="text-sm text-slate-400 flex flex-col gap-2">
-                  <span className="bg-slate-800 px-3 py-2 rounded border border-slate-700">A: {activeQuestion.options[0]}</span>
-                  <span className="bg-slate-800 px-3 py-2 rounded border border-slate-700">B: {activeQuestion.options[1]}</span>
-                </div>
+      <div className="w-full md:w-[450px] flex flex-col gap-6">
+        
+        {/* Active Live Question Panel */}
+        {activeQuestion && (
+           <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border-2 border-orange-500 relative overflow-hidden animate-in fade-in">
+              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
+              <div className="flex justify-between items-center mb-4">
+                 <h3 className="text-xl font-bold text-orange-400 flex items-center gap-2">
+                   <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div> Live Session
+                 </h3>
+                 <button onClick={clearQuestion} className="text-sm bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-white border border-slate-600">Close Question</button>
               </div>
-              <button 
-                onClick={clearQuestion}
-                className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all text-white border border-slate-600 active:scale-95"
-              >
-                Close Question
-              </button>
-            </div>
-          )}
-        </div>
+              <p className="font-semibold text-white text-lg mb-4">{activeQuestion.text}</p>
+              
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-700 max-h-64 overflow-y-auto space-y-2">
+                 {answers.length === 0 ? (
+                    <p className="text-slate-500 text-center italic text-sm">Waiting for student responses...</p>
+                 ) : (
+                    answers.map((ans, idx) => (
+                      <div key={idx} className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex flex-col gap-1">
+                        <span className="font-medium text-slate-300 text-sm">{ans.studentName}</span>
+                        <span className="text-white font-bold bg-blue-500/20 px-3 py-1.5 rounded inline-block border border-blue-500/30 break-words">
+                          {Array.isArray(ans.selectedOption) ? ans.selectedOption.join(' ➔ ') : ans.selectedOption}
+                        </span>
+                      </div>
+                    ))
+                 )}
+              </div>
+           </div>
+        )}
 
-        <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex-1 flex flex-col relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
-          <h3 className="text-xl font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2 flex items-center gap-2">
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
-             Live Responses
-          </h3>
-          <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-            {answers.length === 0 ? (
-              <p className="text-slate-500 text-center mt-8 italic">No responses yet...</p>
-            ) : (
-              answers.map((ans, idx) => (
-                <div key={idx} className="bg-slate-900 p-3 rounded-lg border border-slate-700 flex justify-between items-center animate-in fade-in slide-in-from-bottom-2">
-                  <span className="font-medium text-slate-200">{ans.studentName}</span>
-                  <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full text-sm font-bold border border-blue-500/30">
-                    {ans.selectedOption}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        {/* Question Builder & Bank (Hides when a question is active) */}
+        {!activeQuestion && (
+           <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 border-b border-slate-700 bg-slate-800/50">
+                 <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                    Question Builder
+                 </h3>
+                 <div className="space-y-4">
+                    <select 
+                       value={qType} 
+                       onChange={(e) => setQType(e.target.value)}
+                       className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 appearance-none font-medium"
+                    >
+                       <option value="mcq">🔵 Multiple Choice</option>
+                       <option value="short_answer">📝 Short Answer</option>
+                       <option value="thumbs">👍 Thumbs Up / Down</option>
+                       <option value="temperature">🌡️ Temperature Check (Emoji)</option>
+                       <option value="rank">🔢 Rank / Order Items</option>
+                    </select>
+
+                    <textarea 
+                      placeholder="Type your question here..." 
+                      value={qText}
+                      onChange={(e) => setQText(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 h-20 resize-none"
+                    />
+
+                    {(qType === 'mcq' || qType === 'rank') && (
+                       <div className="space-y-2">
+                          {qOptions.map((opt, i) => (
+                             <div key={i} className="flex gap-2">
+                                <input 
+                                   type="text" 
+                                   placeholder={`Option ${i + 1}`}
+                                   value={opt}
+                                   onChange={(e) => updateOption(i, e.target.value)}
+                                   className="flex-1 bg-slate-900 border border-slate-600 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm"
+                                />
+                                {qOptions.length > 2 && (
+                                   <button onClick={() => removeOption(i)} className="p-2 bg-red-900/50 text-red-400 hover:bg-red-500 hover:text-white rounded-lg border border-red-500/30 transition-colors">
+                                      ✕
+                                   </button>
+                                )}
+                             </div>
+                          ))}
+                          <button onClick={addOption} className="text-sm text-blue-400 hover:text-blue-300 font-medium">+ Add Option</button>
+                       </div>
+                    )}
+
+                    <button 
+                      onClick={saveToBank}
+                      className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all shadow-lg text-white active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                      Save to Question Bank
+                    </button>
+                 </div>
+              </div>
+
+              <div className="flex-1 p-6 overflow-y-auto bg-slate-900/50">
+                 <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Saved Questions ({questionBank.length})</h4>
+                 <div className="space-y-3">
+                    {questionBank.length === 0 ? (
+                       <p className="text-slate-500 text-sm italic text-center mt-6">Build questions above to save them for class.</p>
+                    ) : (
+                       questionBank.map((q) => (
+                          <div key={q.id} className="bg-slate-800 p-4 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-3 group">
+                             <div className="flex justify-between items-start gap-2">
+                                <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
+                                <span className="text-xs px-2 py-1 bg-slate-700 rounded text-slate-300 whitespace-nowrap">
+                                   {q.type === 'mcq' && 'MCQ'}
+                                   {q.type === 'short_answer' && 'Short Ans'}
+                                   {q.type === 'thumbs' && 'Thumbs'}
+                                   {q.type === 'temperature' && 'Temp'}
+                                   {q.type === 'rank' && 'Rank'}
+                                </span>
+                             </div>
+                             <div className="flex gap-2 mt-1">
+                                <button 
+                                   onClick={() => launchQuestion(q)}
+                                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg font-bold text-sm transition-colors shadow-md active:scale-95"
+                                >
+                                   Launch Live
+                                </button>
+                                <button 
+                                   onClick={() => deleteFromBank(q.id)}
+                                   className="px-3 bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white rounded-lg transition-colors border border-slate-600"
+                                >
+                                   🗑️
+                                </button>
+                             </div>
+                          </div>
+                       ))
+                    )}
+                 </div>
+              </div>
+           </div>
+        )}
       </div>
     </div>
   );
@@ -461,18 +558,22 @@ function StudentView({ user, roomCode, studentName }) {
   const [hasAnswered, setHasAnswered] = useState(false);
   const questionIdRef = useRef(null);
 
+  // Specific states for different question types
+  const [shortAnswerText, setShortAnswerText] = useState('');
+  const [rankOrder, setRankOrder] = useState([]);
+
   useEffect(() => {
     const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
     const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        
         setActiveSlide(data.activeSlide || null);
 
         if (data.activeQuestion) {
-          // Reset answered state only if it's a completely new question ID
           if (questionIdRef.current !== data.activeQuestion.id) {
             setHasAnswered(false);
+            setShortAnswerText('');
+            setRankOrder([]);
             questionIdRef.current = data.activeQuestion.id;
           }
           setActiveQuestion(data.activeQuestion);
@@ -486,14 +587,14 @@ function StudentView({ user, roomCode, studentName }) {
     return () => unsubscribe();
   }, [roomCode]);
 
-  const submitAnswer = async (optionText) => {
+  const submitAnswer = async (payload) => {
     if (!activeQuestion) return;
     setHasAnswered(true); 
     try {
       const answerRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers', user.uid);
       await setDoc(answerRef, {
         studentName: studentName,
-        selectedOption: optionText,
+        selectedOption: payload,
         questionId: activeQuestion.id,
         timestamp: Date.now()
       });
@@ -501,6 +602,14 @@ function StudentView({ user, roomCode, studentName }) {
       console.error("Failed to submit answer:", err);
       setHasAnswered(false);
     }
+  };
+
+  const handleRankClick = (opt) => {
+      if (rankOrder.includes(opt)) {
+          setRankOrder(rankOrder.filter(o => o !== opt));
+      } else {
+          setRankOrder([...rankOrder, opt]);
+      }
   };
 
   return (
@@ -531,11 +640,10 @@ function StudentView({ user, roomCode, studentName }) {
             </div>
          ) : (
             <div className="w-full h-full bg-black">
-               {/* THE INVISIBLE GLASS SHIELD: Blocks all student clicks on the iframe! */}
+               {/* Invisible Glass Shield to block student clicks */}
                {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
                   <div className="absolute inset-0 z-10 w-full h-full cursor-not-allowed"></div>
                )}
-               
                {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
                   <iframe 
                     src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
@@ -552,31 +660,132 @@ function StudentView({ user, roomCode, studentName }) {
 
       {}
       {activeQuestion && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/70 backdrop-blur-md transition-all duration-300">
-          <div className="bg-slate-800 rounded-3xl p-8 w-full max-w-xl shadow-[0_0_40px_rgba(0,0,0,0.5)] border border-slate-600 transform transition-all scale-100 opacity-100 animate-in zoom-in-95 relative overflow-hidden">
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-md transition-all duration-300 overflow-y-auto">
+          <div className="bg-slate-800 rounded-3xl p-6 sm:p-8 w-full max-w-2xl shadow-[0_0_40px_rgba(0,0,0,0.5)] border border-slate-600 relative overflow-hidden my-auto">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
             
             <div className="text-center mb-8 mt-2">
-               <div className="inline-block bg-orange-500/20 text-orange-400 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest mb-4 border border-orange-500/30 shadow-inner">
-                 Pop Question
+               <div className="inline-block bg-orange-500/20 text-orange-400 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest mb-4 border border-orange-500/30">
+                 {activeQuestion.type === 'mcq' && 'Multiple Choice'}
+                 {activeQuestion.type === 'short_answer' && 'Short Answer'}
+                 {activeQuestion.type === 'thumbs' && 'Quick Poll'}
+                 {activeQuestion.type === 'temperature' && 'Temperature Check'}
+                 {activeQuestion.type === 'rank' && 'Rank Order'}
                </div>
-               <h2 className="text-3xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
+               <h2 className="text-2xl sm:text-3xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
             </div>
             
             {!hasAnswered ? (
-              <div className="grid grid-cols-1 gap-4">
-                {activeQuestion.options.map((option, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => submitAnswer(option)}
-                    className="w-full py-5 px-6 bg-slate-700 hover:bg-orange-600 text-white text-xl font-medium rounded-2xl transition-colors border border-slate-600 hover:border-orange-500 flex items-center justify-between group shadow-lg active:scale-95"
-                  >
-                    <span>{option}</span>
-                    <div className="w-8 h-8 rounded-full border-2 border-slate-500 group-hover:border-white flex items-center justify-center">
-                       <div className="w-3 h-3 rounded-full bg-transparent group-hover:bg-white transition-colors"></div>
-                    </div>
-                  </button>
-                ))}
+              <div className="w-full">
+                
+                {/* 1. Multiple Choice UI */}
+                {activeQuestion.type === 'mcq' && (
+                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                     {activeQuestion.options.map((option, idx) => (
+                       <button
+                         key={idx}
+                         onClick={() => submitAnswer(option)}
+                         className="w-full py-5 px-6 bg-slate-700 hover:bg-orange-600 text-white text-lg sm:text-xl font-medium rounded-2xl transition-colors border border-slate-600 hover:border-orange-500 shadow-lg active:scale-95 text-left"
+                       >
+                         {option}
+                       </button>
+                     ))}
+                   </div>
+                )}
+
+                {/* 2. Short Answer UI */}
+                {activeQuestion.type === 'short_answer' && (
+                   <div className="flex flex-col gap-4">
+                      <textarea 
+                         placeholder="Type your answer here..."
+                         value={shortAnswerText}
+                         onChange={(e) => setShortAnswerText(e.target.value)}
+                         className="w-full bg-slate-900 border-2 border-slate-600 rounded-2xl p-4 text-white text-lg focus:outline-none focus:border-orange-500 h-32 resize-none"
+                      />
+                      <button 
+                         onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
+                         className={`w-full py-4 rounded-xl font-bold text-xl transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
+                      >
+                         Submit Answer
+                      </button>
+                   </div>
+                )}
+
+                {/* 3. Thumbs Up/Down UI */}
+                {activeQuestion.type === 'thumbs' && (
+                   <div className="flex gap-4 justify-center">
+                      <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-10 bg-slate-700 hover:bg-emerald-600 rounded-3xl border-2 border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-xl group">
+                         <div className="text-6xl mb-2 group-hover:scale-110 transition-transform">👍</div>
+                         <div className="text-white font-bold text-lg">Yes / Agree</div>
+                      </button>
+                      <button onClick={() => submitAnswer('👎 Thumbs Down')} className="flex-1 py-10 bg-slate-700 hover:bg-red-600 rounded-3xl border-2 border-slate-600 hover:border-red-500 transition-all active:scale-95 shadow-xl group">
+                         <div className="text-6xl mb-2 group-hover:scale-110 transition-transform">👎</div>
+                         <div className="text-white font-bold text-lg">No / Disagree</div>
+                      </button>
+                   </div>
+                )}
+
+                {/* 4. Temperature Check UI */}
+                {activeQuestion.type === 'temperature' && (
+                   <div className="flex flex-wrap justify-center gap-4">
+                      {[
+                        { e: '🥵', t: 'Overwhelmed' },
+                        { e: '😕', t: 'Confused' },
+                        { e: '😐', t: 'Neutral' },
+                        { e: '🙂', t: 'Getting It' },
+                        { e: '🤩', t: 'Mastered It' }
+                      ].map((item, idx) => (
+                        <button 
+                           key={idx} 
+                           onClick={() => submitAnswer(`${item.e} ${item.t}`)}
+                           className="flex flex-col items-center gap-2 p-4 bg-slate-700 hover:bg-orange-600 border border-slate-600 hover:border-orange-500 rounded-2xl transition-all active:scale-95 shadow-lg group w-28"
+                        >
+                           <div className="text-4xl group-hover:scale-125 transition-transform">{item.e}</div>
+                           <div className="text-white text-xs font-bold text-center leading-tight">{item.t}</div>
+                        </button>
+                      ))}
+                   </div>
+                )}
+
+                {/* 5. Rank Order UI */}
+                {activeQuestion.type === 'rank' && (
+                   <div className="flex flex-col gap-6">
+                      <p className="text-slate-300 text-center text-sm">Tap the items below in the correct order to build your list.</p>
+                      
+                      {/* Slots (Selected) */}
+                      <div className="flex flex-col gap-2 min-h-[100px] p-4 bg-slate-900 border-2 border-dashed border-slate-600 rounded-2xl">
+                         {rankOrder.length === 0 ? (
+                            <div className="text-slate-500 text-center italic my-auto">Your ranking will appear here...</div>
+                         ) : (
+                            rankOrder.map((opt, idx) => (
+                               <button key={idx} onClick={() => handleRankClick(opt)} className="bg-blue-600 text-white font-bold py-3 px-4 rounded-xl text-left flex gap-4 items-center shadow-md animate-in slide-in-from-bottom-2">
+                                  <span className="bg-black/30 w-8 h-8 rounded-full flex items-center justify-center text-sm">{idx + 1}</span>
+                                  {opt}
+                               </button>
+                            ))
+                         )}
+                      </div>
+
+                      {/* Pool (Unselected) */}
+                      <div className="flex flex-wrap gap-3 justify-center">
+                         {activeQuestion.options.filter(o => !rankOrder.includes(o)).map((opt, idx) => (
+                            <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-3 px-6 rounded-xl font-medium shadow-sm active:scale-95 transition-all">
+                               {opt}
+                            </button>
+                         ))}
+                      </div>
+
+                      {rankOrder.length === activeQuestion.options.length && (
+                         <button 
+                            onClick={() => submitAnswer(rankOrder)}
+                            className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xl transition-all shadow-lg active:scale-95 animate-in zoom-in"
+                         >
+                            Submit Final Order
+                         </button>
+                      )}
+                   </div>
+                )}
+
               </div>
             ) : (
               <div className="text-center py-10">
@@ -613,7 +822,6 @@ function ProjectorView({ roomCode }) {
   return (
     <div className="fixed inset-0 w-full h-full bg-black flex flex-col font-sans overflow-hidden z-50">
       
-      {/* Floating Header - Only shows Join Code */}
       <div className="absolute top-6 right-6 z-20 pointer-events-none">
         <div className="bg-black/80 backdrop-blur-md px-6 py-4 rounded-2xl border-2 border-emerald-500/50 shadow-[0_0_20px_rgba(16,185,129,0.3)] text-center">
           <div className="text-emerald-400 text-sm font-bold uppercase tracking-widest mb-1">Join Code</div>
@@ -621,7 +829,6 @@ function ProjectorView({ roomCode }) {
         </div>
       </div>
 
-      {/* Main Presentation Layer - NO GLASS SHIELD SO TEACHER CAN CLICK */}
       <div className="absolute inset-0 w-full h-full z-0 flex items-center justify-center">
          {!activeSlide ? (
             <div className="flex flex-col items-center justify-center scale-150">
@@ -631,8 +838,7 @@ function ProjectorView({ roomCode }) {
             </div>
          ) : (
             <div className="w-full h-full bg-black">
-               {/* Notice: The Glass Shield div has been removed here! */}
-               
+               {/* No Glass Shield here, Teacher can click! */}
                {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
                   <iframe 
                     src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
@@ -647,26 +853,67 @@ function ProjectorView({ roomCode }) {
          )}
       </div>
 
-      {/* Projector View of the Question (Read Only) */}
       {activeQuestion && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-md transition-all duration-300 pointer-events-none">
-          <div className="bg-slate-800 rounded-[2rem] p-12 w-full max-w-4xl shadow-[0_0_60px_rgba(0,0,0,0.8)] border-2 border-slate-600 relative overflow-hidden">
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/90 backdrop-blur-md transition-all duration-300 pointer-events-none">
+          <div className="bg-slate-800 rounded-[2rem] p-12 w-full max-w-5xl shadow-[0_0_60px_rgba(0,0,0,0.8)] border-2 border-slate-600 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-3 bg-gradient-to-r from-orange-400 to-pink-500"></div>
             
             <div className="text-center mb-12 mt-4">
                <div className="inline-block bg-orange-500/20 text-orange-400 px-6 py-2 rounded-full text-lg font-bold uppercase tracking-widest mb-6 border border-orange-500/30">
-                 Class Discussion
+                 Live Class Activity
                </div>
                <h2 className="text-6xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
             </div>
             
-            <div className="grid grid-cols-2 gap-8">
-              {activeQuestion.options.map((option, idx) => (
-                <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-3xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
-                  {option}
-                </div>
-              ))}
-            </div>
+            {/* Projector read-only displays for the new question types */}
+            {activeQuestion.type === 'mcq' && (
+              <div className="grid grid-cols-2 gap-8">
+                {activeQuestion.options.map((option, idx) => (
+                  <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-4xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
+                    {option}
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {activeQuestion.type === 'short_answer' && (
+               <div className="text-center py-12 bg-slate-900 border-2 border-dashed border-slate-600 rounded-3xl">
+                  <p className="text-4xl text-slate-400 font-medium italic">✍️ Type your answers on your device...</p>
+               </div>
+            )}
+
+            {activeQuestion.type === 'thumbs' && (
+               <div className="flex gap-12 justify-center">
+                  <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
+                     <span className="text-8xl">👍</span><span className="text-white text-3xl font-bold mt-4">Yes / Agree</span>
+                  </div>
+                  <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
+                     <span className="text-8xl">👎</span><span className="text-white text-3xl font-bold mt-4">No / Disagree</span>
+                  </div>
+               </div>
+            )}
+
+            {activeQuestion.type === 'temperature' && (
+               <div className="flex justify-center gap-8">
+                  {['🥵', '😕', '😐', '🙂', '🤩'].map((emoji, idx) => (
+                     <div key={idx} className="bg-slate-700 p-8 rounded-full border-2 border-slate-600 flex items-center justify-center w-32 h-32 text-6xl shadow-xl">
+                        {emoji}
+                     </div>
+                  ))}
+               </div>
+            )}
+
+            {activeQuestion.type === 'rank' && (
+               <div className="flex flex-wrap gap-4 justify-center">
+                  {activeQuestion.options.map((opt, idx) => (
+                     <div key={idx} className="bg-slate-700 text-white text-3xl font-bold py-6 px-10 rounded-2xl border-2 border-slate-500 shadow-lg">
+                        {opt}
+                     </div>
+                  ))}
+                  <p className="w-full text-center text-slate-400 text-2xl mt-8">🔢 Tap items in order on your screen to rank them!</p>
+               </div>
+            )}
+            
           </div>
         </div>
       )}
