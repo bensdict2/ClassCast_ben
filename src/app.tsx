@@ -28,6 +28,21 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Dynamic PeerJS Loader for Screen Sharing
+const loadPeerJS = () => {
+  return new Promise((resolve, reject) => {
+    if (window.Peer) {
+      resolve(window.Peer);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js';
+    script.onload = () => resolve(window.Peer);
+    script.onerror = () => reject(new Error('Failed to load PeerJS'));
+    document.head.appendChild(script);
+  });
+};
+
 const generateRoomCode = () => {
   return Math.floor(10000 + Math.random() * 90000).toString(); 
 };
@@ -35,7 +50,6 @@ const generateRoomCode = () => {
 const parseMediaUrl = (url, page = 1) => {
     if (!url) return null;
     
-    // Google Slides Detection (Extracted Presentation ID)
     if (url.includes('docs.google.com/presentation')) {
         const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
         if (match && match[1]) {
@@ -44,7 +58,6 @@ const parseMediaUrl = (url, page = 1) => {
         }
     }
     
-    // YouTube Detection
     if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
         let videoId = '';
         if (url.includes('youtube.com/watch')) {
@@ -65,6 +78,7 @@ export default function App() {
   const [studentName, setStudentName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isTeacherLink, setIsTeacherLink] = useState(false);
+  const [isPeerLoaded, setIsPeerLoaded] = useState(false);
 
   const urlParams = new URLSearchParams(window.location.search);
   const isProjector = urlParams.get('projector') === 'true';
@@ -89,10 +103,13 @@ export default function App() {
         setIsTeacherLink(true);
     }
 
+    // Load PeerJS in the background
+    loadPeerJS().then(() => setIsPeerLoaded(true)).catch(err => console.error(err));
+
     return () => unsubscribe();
   }, []);
 
-  if (!user) {
+  if (!user || !isPeerLoaded) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
         <div className="animate-pulse text-xl font-semibold text-emerald-400">Loading Classroom Environment...</div>
@@ -180,9 +197,15 @@ export default function App() {
 }
 
 function TeacherView({ roomCode }) {
-  // Slide State
+  // Slide & Screen Share State
   const [slideUrl, setSlideUrl] = useState('');
   const [activeSlide, setActiveSlide] = useState(null);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  
+  // WebRTC Refs for Screen Share
+  const videoRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const peerRef = useRef(null);
   
   // Question State & Bank
   const [activeQuestion, setActiveQuestion] = useState(null);
@@ -228,14 +251,11 @@ function TeacherView({ roomCode }) {
   // Listen for physical presentation clickers (Page Up/Down, Arrows, Space)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Do not trigger if the teacher is typing a question in a text box!
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-      
-      // Do not trigger if there is no active presentation running
-      if (!activeSlide) return;
+      if (!activeSlide || activeSlide.type === 'screen') return;
 
       if (['ArrowRight', 'PageDown', ' '].includes(e.key)) {
-        e.preventDefault(); // Stop the webpage from scrolling down
+        e.preventDefault(); 
         changePage(1);
       } else if (['ArrowLeft', 'PageUp'].includes(e.key)) {
         e.preventDefault();
@@ -249,9 +269,11 @@ function TeacherView({ roomCode }) {
 
   const pushSlide = async () => {
     if (!slideUrl) return;
+    if (isBroadcasting) stopBroadcast(); // Auto-switch off screen share
+    
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
-      const slideData = { url: slideUrl, page: 1, timestamp: Date.now() };
+      const slideData = { type: 'link', url: slideUrl, page: 1, timestamp: Date.now() };
       await setDoc(sessionRef, { activeSlide: slideData }, { merge: true });
       setActiveSlide(slideData);
       setSlideUrl(''); 
@@ -262,7 +284,7 @@ function TeacherView({ roomCode }) {
   };
 
   const changePage = async (delta) => {
-    if (!activeSlide) return;
+    if (!activeSlide || activeSlide.type === 'screen') return;
     const newPage = Math.max(1, (activeSlide.page || 1) + delta);
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
@@ -275,6 +297,7 @@ function TeacherView({ roomCode }) {
   };
 
   const clearSlide = async () => {
+    if (isBroadcasting) stopBroadcast();
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
       await setDoc(sessionRef, { activeSlide: null }, { merge: true });
@@ -282,41 +305,95 @@ function TeacherView({ roomCode }) {
     } catch (err) {}
   };
 
+  const startBroadcast = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 15 } },
+        audio: false
+      });
+
+      localStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      setIsBroadcasting(true);
+      setErrorMsg('');
+
+      stream.getVideoTracks()[0].onended = () => {
+        stopBroadcast();
+      };
+
+      const peer = new window.Peer(`classcast-${appId}-${roomCode}-host`);
+      peerRef.current = peer;
+
+      peer.on('connection', (conn) => {
+        conn.on('data', async (data) => {
+          if (data.type === 'request-stream') {
+             const call = peer.call(conn.peer, localStreamRef.current);
+             try {
+                const sender = call.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                if (sender) {
+                  const parameters = sender.getParameters();
+                  if (!parameters.encodings) parameters.encodings = [{}];
+                  parameters.encodings[0].maxBitrate = 400 * 1000; // Throttle to 400kbps to protect school Wi-Fi
+                  await sender.setParameters(parameters);
+                }
+             } catch (err) { console.warn(err); }
+          }
+        });
+      });
+
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+      const slideData = { type: 'screen', timestamp: Date.now() };
+      await setDoc(sessionRef, { activeSlide: slideData }, { merge: true });
+      setActiveSlide(slideData);
+
+    } catch (err) {
+      setErrorMsg("Failed to start screen share. Permissions denied.");
+    }
+  };
+
+  const stopBroadcast = async () => {
+    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(track => track.stop());
+    if (peerRef.current) peerRef.current.destroy();
+    setIsBroadcasting(false);
+    
+    try {
+      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+      await setDoc(sessionRef, { activeSlide: null }, { merge: true });
+      setActiveSlide(null);
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    return () => {
+       if (isBroadcasting) stopBroadcast();
+    };
+  }, []);
+
   const updateOption = (index, value) => {
       const newOptions = [...qOptions];
       newOptions[index] = value;
       setQOptions(newOptions);
   };
-
   const addOption = () => setQOptions([...qOptions, '']);
   const removeOption = (index) => setQOptions(qOptions.filter((_, i) => i !== index));
 
   const saveToBank = async () => {
       if (!qText.trim()) {
-          setErrorMsg("Question text cannot be empty.");
-          return;
+          setErrorMsg("Question text cannot be empty."); return;
       }
-      if ((qType === 'mcq' || qType === 'rank') && qOptions.some(o => !o.trim())) {
-          setErrorMsg("Please fill out all options or remove empty ones.");
-          return;
-      }
-
       const newQuestion = {
           id: Date.now().toString(),
           type: qType,
           text: qText,
           options: (qType === 'mcq' || qType === 'rank') ? qOptions.filter(o => o.trim()) : [],
       };
-
       try {
           const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
           await setDoc(sessionRef, { bank: [...questionBank, newQuestion] }, { merge: true });
-          setQText('');
-          setQOptions(['', '']);
-          setErrorMsg('');
-      } catch (err) {
-          setErrorMsg("Failed to save to bank.");
-      }
+          setQText(''); setQOptions(['', '']); setErrorMsg('');
+      } catch (err) { setErrorMsg("Failed to save to bank."); }
   };
 
   const deleteFromBank = async (qId) => {
@@ -330,10 +407,8 @@ function TeacherView({ roomCode }) {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
       await setDoc(sessionRef, { activeQuestion: questionObj }, { merge: true });
       setActiveQuestion(questionObj);
-      setAnswers([]); // Reset answers locally when launching new question
-    } catch (err) {
-      setErrorMsg("Failed to send question to class.");
-    }
+      setAnswers([]); 
+    } catch (err) { setErrorMsg("Failed to send question to class."); }
   };
 
   const clearQuestion = async () => {
@@ -374,25 +449,44 @@ function TeacherView({ roomCode }) {
 
         {/* Presentation Deck */}
         <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex flex-col gap-4 flex-1">
-           <h3 className="text-xl font-bold text-slate-100 border-b border-slate-700 pb-3 flex items-center gap-2">
-              <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-              Cloud Presentation Sync
+           <h3 className="text-xl font-bold text-slate-100 border-b border-slate-700 pb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                 <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                 Cloud Presentation Sync
+              </div>
            </h3>
            
-           <div className="flex gap-2">
+           <div className="flex gap-3">
               <input 
                  type="text" 
-                 placeholder="Paste a Google Slides URL, Image Link, or YouTube Link..." 
+                 placeholder="Paste Google Slides or Image Link..." 
                  value={slideUrl}
                  onChange={(e) => setSlideUrl(e.target.value)}
                  className="flex-1 bg-slate-900 border border-slate-600 rounded-xl p-4 text-white focus:outline-none focus:border-emerald-500 font-mono text-sm"
               />
               <button 
                  onClick={pushSlide}
-                 className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95"
+                 className="px-6 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap"
               >
-                 Sync to Class
+                 Sync Link
               </button>
+              <div className="border-l border-slate-600 mx-2"></div>
+              {!isBroadcasting ? (
+                 <button 
+                    onClick={startBroadcast}
+                    className="px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
+                 >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    Share Screen
+                 </button>
+              ) : (
+                 <button 
+                    onClick={stopBroadcast}
+                    className="px-6 py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap animate-pulse"
+                 >
+                    Stop Sharing
+                 </button>
+              )}
            </div>
 
            <div className="flex-1 bg-black rounded-xl overflow-hidden border border-slate-700 relative flex items-center justify-center min-h-[350px]">
@@ -403,7 +497,15 @@ function TeacherView({ roomCode }) {
                        <button onClick={clearSlide} className="text-red-400 hover:text-red-300 ml-2 underline ml-4 border-l border-slate-600 pl-4">Clear Screen</button>
                     </div>
                     
-                    {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                    {activeSlide.type === 'screen' ? (
+                       <video 
+                         ref={videoRef} 
+                         autoPlay 
+                         playsInline 
+                         muted 
+                         className="w-full h-full object-contain"
+                       />
+                    ) : parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' ? (
                        <div className="w-full h-full flex flex-col relative">
                           <iframe 
                             src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
@@ -412,36 +514,32 @@ function TeacherView({ roomCode }) {
                           />
                           {activeSlide.url.includes('docs.google.com/presentation') && (
                               <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-900/95 p-3 rounded-2xl border-2 border-slate-600 flex items-center gap-6 z-30 shadow-2xl backdrop-blur-md">
-                                 <button onClick={() => changePage(-1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">&larr; Prev Slide</button>
+                                 <button onClick={() => changePage(-1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">&larr; Prev</button>
                                  <span className="text-emerald-400 font-bold whitespace-nowrap text-lg">Slide {activeSlide.page || 1}</span>
-                                 <button onClick={() => changePage(1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">Next Slide &rarr;</button>
+                                 <button onClick={() => changePage(1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">Next &rarr;</button>
                               </div>
                           )}
                        </div>
-                    )}
-
-                    {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
+                    ) : (
                        <img 
                           src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
                           className="w-full h-full object-contain" 
-                          alt="Teacher Slide Preview" 
+                          alt="Preview" 
                        />
                     )}
                  </>
               ) : (
                  <div className="text-center text-slate-500">
                     <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                    <p>Enter a URL above to display it to the class instantly.</p>
+                    <p>Paste a link or share your screen above.</p>
                  </div>
               )}
            </div>
         </div>
       </div>
 
-      {}
+      {/* Right Column: Question Panel (UNCHANGED) */}
       <div className="w-full md:w-[450px] flex flex-col gap-6">
-        
-        {/* Active Live Question Panel */}
         {activeQuestion && (
            <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border-2 border-orange-500 relative overflow-hidden animate-in fade-in">
               <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
@@ -470,7 +568,6 @@ function TeacherView({ roomCode }) {
            </div>
         )}
 
-        {/* Question Builder & Bank (Hides when a question is active) */}
         {!activeQuestion && (
            <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 flex flex-col flex-1 overflow-hidden">
               <div className="p-6 border-b border-slate-700 bg-slate-800/50">
@@ -510,9 +607,7 @@ function TeacherView({ roomCode }) {
                                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm"
                                 />
                                 {qOptions.length > 2 && (
-                                   <button onClick={() => removeOption(i)} className="p-2 bg-red-900/50 text-red-400 hover:bg-red-500 hover:text-white rounded-lg border border-red-500/30 transition-colors">
-                                      ✕
-                                   </button>
+                                   <button onClick={() => removeOption(i)} className="p-2 bg-red-900/50 text-red-400 hover:bg-red-500 hover:text-white rounded-lg border border-red-500/30 transition-colors">✕</button>
                                 )}
                              </div>
                           ))}
@@ -580,7 +675,11 @@ function StudentView({ user, roomCode, studentName }) {
   const [hasAnswered, setHasAnswered] = useState(false);
   const questionIdRef = useRef(null);
 
-  // Specific states for different question types
+  // WebRTC States
+  const [isPeerConnected, setIsPeerConnected] = useState(false);
+  const videoRef = useRef(null);
+  const peerRef = useRef(null);
+
   const [shortAnswerText, setShortAnswerText] = useState('');
   const [rankOrder, setRankOrder] = useState([]);
 
@@ -608,6 +707,35 @@ function StudentView({ user, roomCode, studentName }) {
     });
     return () => unsubscribe();
   }, [roomCode]);
+
+  // Listen for WebRTC Stream ONLY if the teacher pushes a screen share
+  useEffect(() => {
+     if (activeSlide?.type === 'screen' && window.Peer && !isPeerConnected) {
+         const peer = new window.Peer();
+         peerRef.current = peer;
+         const teacherId = `classcast-${appId}-${roomCode}-host`;
+
+         peer.on('open', () => {
+             const conn = peer.connect(teacherId);
+             conn.on('open', () => {
+                 setIsPeerConnected(true);
+                 conn.send({ type: 'request-stream' });
+             });
+         });
+
+         peer.on('call', (call) => {
+             call.answer(); 
+             call.on('stream', (stream) => {
+                 if (videoRef.current) videoRef.current.srcObject = stream;
+             });
+         });
+
+         return () => {
+             peer.destroy();
+             setIsPeerConnected(false);
+         };
+     }
+  }, [activeSlide?.type, roomCode]); 
 
   const submitAnswer = async (payload) => {
     if (!activeQuestion) return;
@@ -653,10 +781,9 @@ function StudentView({ user, roomCode, studentName }) {
         </div>
       </div>
 
-      {/* Main Split Layout */}
       <div className="flex-1 w-full h-full flex flex-col md:flex-row relative z-0">
          
-         {/* Presentation Layer (Squeezes smoothly when sidebar opens) */}
+         {/* Presentation Layer */}
          <div className="flex-1 h-full relative bg-black flex items-center justify-center transition-all duration-500 overflow-hidden">
             {!activeSlide ? (
                <div className="flex flex-col items-center justify-center scale-110">
@@ -664,26 +791,40 @@ function StudentView({ user, roomCode, studentName }) {
                   <p className="text-slate-500 font-medium text-xl tracking-wide">Waiting for teacher's presentation...</p>
                </div>
             ) : (
-               <div className="w-full h-full bg-black">
-                  {/* Invisible Glass Shield to block student clicks */}
-                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
-                     <div className="absolute inset-0 z-10 w-full h-full cursor-not-allowed"></div>
-                  )}
-                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
-                     <iframe 
-                       src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
-                       className="w-full h-full border-0 bg-black pointer-events-none" 
-                       allowFullScreen
-                     />
-                  )}
-                  {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
-                     <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
+               <div className="w-full h-full bg-black relative">
+                  
+                  {activeSlide.type === 'screen' ? (
+                     <>
+                        {!isPeerConnected && (
+                           <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-black">
+                              <div className="w-12 h-12 border-4 border-slate-700 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
+                              <p className="text-slate-400 font-medium">Connecting to Screen Share...</p>
+                           </div>
+                        )}
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain pointer-events-none" />
+                     </>
+                  ) : (
+                     <>
+                        {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                           <div className="absolute inset-0 z-10 w-full h-full cursor-not-allowed"></div>
+                        )}
+                        {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                           <iframe 
+                             src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
+                             className="w-full h-full border-0 bg-black pointer-events-none" 
+                             allowFullScreen
+                           />
+                        )}
+                        {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
+                           <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
+                        )}
+                     </>
                   )}
                </div>
             )}
          </div>
 
-         {/* Responsive Sidebar (Slides in on right for Desktop, bottom for Mobile) */}
+         {/* Responsive Sidebar for Questions */}
          <div 
            className={`bg-slate-800 shadow-[-20px_0_40px_rgba(0,0,0,0.6)] flex flex-col transition-all duration-500 ease-in-out relative z-30 overflow-hidden
            ${activeQuestion ? 'h-[55%] md:h-full w-full md:w-[420px] border-t md:border-t-0 md:border-l border-orange-500/50' : 'h-0 md:h-full w-full md:w-0 border-none'}`}
@@ -693,7 +834,6 @@ function StudentView({ user, roomCode, studentName }) {
                   <>
                      <div className="absolute top-0 left-0 w-full h-1 md:h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
                      
-                     {/* Sidebar Title Area */}
                      <div className="text-center mb-6">
                         <div className="inline-block bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest mb-3 border border-orange-500/30 shadow-sm">
                           {activeQuestion.type === 'mcq' && 'Multiple Choice'}
@@ -705,11 +845,9 @@ function StudentView({ user, roomCode, studentName }) {
                         <h2 className="text-xl sm:text-2xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
                      </div>
                      
-                     {/* Answer Options Area (Scaled perfectly for Sidebar) */}
                      {!hasAnswered ? (
                        <div className="w-full flex-1 flex flex-col justify-center">
                          
-                         {/* 1. Multiple Choice */}
                          {activeQuestion.type === 'mcq' && (
                             <div className="grid grid-cols-1 gap-3">
                               {activeQuestion.options.map((option, idx) => (
@@ -725,7 +863,6 @@ function StudentView({ user, roomCode, studentName }) {
                             </div>
                          )}
 
-                         {/* 2. Short Answer */}
                          {activeQuestion.type === 'short_answer' && (
                             <div className="flex flex-col gap-4">
                                <textarea 
@@ -743,7 +880,6 @@ function StudentView({ user, roomCode, studentName }) {
                             </div>
                          )}
 
-                         {/* 3. Thumbs Up/Down */}
                          {activeQuestion.type === 'thumbs' && (
                             <div className="flex gap-3 justify-center">
                                <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-8 bg-slate-700 hover:bg-emerald-600 rounded-2xl border border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-lg group">
@@ -757,7 +893,6 @@ function StudentView({ user, roomCode, studentName }) {
                             </div>
                          )}
 
-                         {/* 4. Temperature Check */}
                          {activeQuestion.type === 'temperature' && (
                             <div className="grid grid-cols-2 gap-3">
                                {[
@@ -779,12 +914,9 @@ function StudentView({ user, roomCode, studentName }) {
                             </div>
                          )}
 
-                         {/* 5. Rank Order */}
                          {activeQuestion.type === 'rank' && (
                             <div className="flex flex-col gap-4">
                                <p className="text-slate-400 text-center text-xs">Tap items to rank them</p>
-                               
-                               {/* Slots (Selected) */}
                                <div className="flex flex-col gap-2 min-h-[80px] p-3 bg-slate-900 border border-dashed border-slate-600 rounded-xl">
                                   {rankOrder.length === 0 ? (
                                      <div className="text-slate-500 text-center italic text-sm my-auto">Ranking order...</div>
@@ -797,8 +929,6 @@ function StudentView({ user, roomCode, studentName }) {
                                      ))
                                   )}
                                </div>
-
-                               {/* Pool (Unselected) */}
                                <div className="flex flex-wrap gap-2 justify-center">
                                   {activeQuestion.options.filter(o => !rankOrder.includes(o)).map((opt, idx) => (
                                      <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-2 px-3 rounded-lg font-medium shadow-sm active:scale-95 transition-all text-sm">
@@ -806,7 +936,6 @@ function StudentView({ user, roomCode, studentName }) {
                                      </button>
                                   ))}
                                </div>
-
                                {rankOrder.length === activeQuestion.options.length && (
                                   <button 
                                      onClick={() => submitAnswer(rankOrder)}
@@ -840,6 +969,11 @@ function ProjectorView({ roomCode }) {
   const [activeSlide, setActiveSlide] = useState(null);
   const [activeQuestion, setActiveQuestion] = useState(null);
 
+  // WebRTC
+  const [isPeerConnected, setIsPeerConnected] = useState(false);
+  const videoRef = useRef(null);
+  const peerRef = useRef(null);
+
   useEffect(() => {
     const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
     const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
@@ -851,6 +985,34 @@ function ProjectorView({ roomCode }) {
     });
     return () => unsubscribe();
   }, [roomCode]);
+
+  useEffect(() => {
+     if (activeSlide?.type === 'screen' && window.Peer && !isPeerConnected) {
+         const peer = new window.Peer();
+         peerRef.current = peer;
+         const teacherId = `classcast-${appId}-${roomCode}-host`;
+
+         peer.on('open', () => {
+             const conn = peer.connect(teacherId);
+             conn.on('open', () => {
+                 setIsPeerConnected(true);
+                 conn.send({ type: 'request-stream' });
+             });
+         });
+
+         peer.on('call', (call) => {
+             call.answer(); 
+             call.on('stream', (stream) => {
+                 if (videoRef.current) videoRef.current.srcObject = stream;
+             });
+         });
+
+         return () => {
+             peer.destroy();
+             setIsPeerConnected(false);
+         };
+     }
+  }, [activeSlide?.type, roomCode]);
 
   return (
     <div className="fixed inset-0 w-full h-full bg-black flex flex-col font-sans overflow-hidden z-50">
@@ -870,17 +1032,30 @@ function ProjectorView({ roomCode }) {
                <p className="text-slate-400 text-2xl">Use your Teacher Dashboard to sync media.</p>
             </div>
          ) : (
-            <div className="w-full h-full bg-black">
-               {/* No Glass Shield here, Teacher can click! */}
-               {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
-                  <iframe 
-                    src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
-                    className="w-full h-full border-0 bg-black" 
-                    allowFullScreen
-                  />
-               )}
-               {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
-                  <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
+            <div className="w-full h-full bg-black relative">
+               
+               {activeSlide.type === 'screen' ? (
+                  <>
+                     {!isPeerConnected && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-black">
+                           <div className="w-12 h-12 border-4 border-slate-700 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
+                        </div>
+                     )}
+                     <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain pointer-events-none" />
+                  </>
+               ) : (
+                  <>
+                     {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' && (
+                        <iframe 
+                          src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
+                          className="w-full h-full border-0 bg-black" 
+                          allowFullScreen
+                        />
+                     )}
+                     {parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'image' && (
+                        <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" />
+                     )}
+                  </>
                )}
             </div>
          )}
@@ -898,7 +1073,6 @@ function ProjectorView({ roomCode }) {
                <h2 className="text-6xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
             </div>
             
-            {/* Projector read-only displays for the new question types */}
             {activeQuestion.type === 'mcq' && (
               <div className="grid grid-cols-2 gap-8">
                 {activeQuestion.options.map((option, idx) => (
