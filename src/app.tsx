@@ -627,6 +627,27 @@ function TeacherView({ roomCode }) {
 
               <div className="flex-1 p-6 overflow-y-auto bg-slate-900/50">
                  <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Saved Questions ({questionBank.length})</h4>
+                 
+                 {/* Cloud Backup Panel */}
+                 <div className="mb-6 p-4 bg-slate-800 rounded-xl border border-slate-600 shadow-inner">
+                    <h5 className="text-sm font-bold text-blue-400 flex items-center gap-2 mb-3">
+                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+                       Cloud Bank Backup
+                    </h5>
+                    <input
+                       type="text"
+                       placeholder="Create a Secret Passcode (e.g. Bio101)"
+                       value={syncCode}
+                       onChange={(e) => setSyncCode(e.target.value)}
+                       className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white focus:outline-none focus:border-blue-500 mb-2 text-sm font-mono"
+                    />
+                    <div className="flex gap-2">
+                       <button onClick={saveBankToCloud} className="flex-1 py-2 bg-slate-700 hover:bg-blue-600 text-white rounded-lg font-bold text-xs transition-colors shadow-md">Backup to Cloud</button>
+                       <button onClick={loadBankFromCloud} className="flex-1 py-2 bg-slate-700 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs transition-colors shadow-md">Load from Cloud</button>
+                    </div>
+                    {syncMessage && <p className="mt-2 text-xs font-medium text-center text-slate-300 animate-pulse">{syncMessage}</p>}
+                 </div>
+
                  <div className="space-y-3">
                     {questionBank.length === 0 ? (
                        <p className="text-slate-500 text-sm italic text-center mt-6">Build questions above to save them for class.</p>
