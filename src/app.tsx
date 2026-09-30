@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut
+} from 'firebase/auth';
 import { 
   getFirestore, 
   doc, 
@@ -30,7 +37,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Dynamic PeerJS Loader for Screen Sharing
 const loadPeerJS = () => {
   return new Promise((resolve, reject) => {
     if (window.Peer) {
@@ -51,7 +57,6 @@ const generateRoomCode = () => {
 
 const parseMediaUrl = (url, page = 1) => {
     if (!url) return null;
-    
     if (url.includes('docs.google.com/presentation')) {
         const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
         if (match && match[1]) {
@@ -59,7 +64,6 @@ const parseMediaUrl = (url, page = 1) => {
             return { type: 'iframe', src: embedUrl };
         }
     }
-    
     if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
         let videoId = '';
         if (url.includes('youtube.com/watch')) {
@@ -69,7 +73,6 @@ const parseMediaUrl = (url, page = 1) => {
         }
         return { type: 'iframe', src: `https://www.youtube.com/embed/${videoId}?autoplay=1` };
     }
-
     return { type: 'image', src: url };
 };
 
@@ -79,17 +82,27 @@ export default function App() {
   const [roomCode, setRoomCode] = useState('');
   const [studentName, setStudentName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [isTeacherLink, setIsTeacherLink] = useState(false);
   const [isPeerLoaded, setIsPeerLoaded] = useState(false);
+
+  // Teacher Auth State
+  const [showTeacherAuth, setShowTeacherAuth] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   const urlParams = new URLSearchParams(window.location.search);
   const isProjector = urlParams.get('projector') === 'true';
   const projCode = urlParams.get('code');
 
   useEffect(() => {
+    // Only sign in anonymously initially if they aren't already logged in
+    // This allows students to use the app without accounts.
     const authenticate = async () => {
       try {
-        await signInAnonymously(auth);
+        if (!auth.currentUser) {
+            await signInAnonymously(auth);
+        }
       } catch (error) {
         console.error("Auth Error:", error);
         setErrorMsg("Failed to connect to authentication server.");
@@ -102,14 +115,39 @@ export default function App() {
     });
     
     if (window.location.hash === '#teacher') {
-        setIsTeacherLink(true);
+        setShowTeacherAuth(true);
     }
 
-    // Load PeerJS in the background
     loadPeerJS().then(() => setIsPeerLoaded(true)).catch(err => console.error(err));
 
     return () => unsubscribe();
   }, []);
+
+  const handleTeacherAuthSubmit = async (e) => {
+      e.preventDefault();
+      setErrorMsg('');
+      setAuthLoading(true);
+
+      try {
+          if (isSignUp) {
+              await createUserWithEmailAndPassword(auth, email, password);
+          } else {
+              await signInWithEmailAndPassword(auth, email, password);
+          }
+          // On success, start the session
+          setRoomCode(generateRoomCode());
+          setRole('teacher');
+      } catch (error) {
+          // Format Firebase errors to be user-friendly
+          if (error.code === 'auth/email-already-in-use') setErrorMsg('This email is already registered. Please log in.');
+          else if (error.code === 'auth/wrong-password') setErrorMsg('Incorrect password.');
+          else if (error.code === 'auth/user-not-found') setErrorMsg('No account found with this email.');
+          else if (error.code === 'auth/weak-password') setErrorMsg('Password must be at least 6 characters.');
+          else setErrorMsg(error.message);
+      } finally {
+          setAuthLoading(false);
+      }
+  };
 
   if (!user || !isPeerLoaded) {
     return (
@@ -125,73 +163,116 @@ export default function App() {
 
   if (!role) {
     return (
-      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-4">
-        <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 text-center relative overflow-hidden">
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-4 font-sans">
+        <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-blue-500"></div>
-          <h1 className="text-4xl font-extrabold mb-2 text-white flex items-center justify-center gap-3">
-             <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-             ClassCast
-          </h1>
-          <p className="text-slate-400 mb-8 text-sm">Interactive Cloud Presentation</p>
+          
+          <div className="text-center mb-8">
+              <h1 className="text-4xl font-extrabold mb-2 text-white flex items-center justify-center gap-3">
+                 <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                 ClassCast
+              </h1>
+              <p className="text-slate-400 text-sm">Interactive Cloud Presentation</p>
+          </div>
           
           {errorMsg && (
-            <div className="bg-red-900/50 border border-red-500 text-red-200 p-3 rounded-lg mb-6 text-sm">
+            <div className="bg-red-900/50 border border-red-500 text-red-200 p-3 rounded-lg mb-6 text-sm text-center">
               {errorMsg}
             </div>
           )}
 
-          <div className="space-y-4">
-            {isTeacherLink && (
-               <>
-                <button 
-                  onClick={() => {
-                    setRoomCode(generateRoomCode());
-                    setRole('teacher');
-                  }}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-95"
-                >
-                  Start as Teacher (Host)
-                </button>
-                <div className="relative flex py-2 items-center">
-                  <div className="flex-grow border-t border-slate-600"></div>
-                  <span className="flex-shrink-0 mx-4 text-slate-500 text-sm">or join class</span>
-                  <div className="flex-grow border-t border-slate-600"></div>
+          {!showTeacherAuth ? (
+              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                <input 
+                  type="text" 
+                  placeholder="Student Name" 
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-400"
+                />
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    placeholder="5-Digit Code" 
+                    value={roomCode}
+                    onChange={(e) => setRoomCode(e.target.value.toUpperCase().trim().slice(0, 5))}
+                    className="w-2/3 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-center text-lg tracking-widest placeholder-slate-400 font-mono"
+                  />
+                  <button 
+                    onClick={() => {
+                      if (roomCode.length === 5 && studentName.trim()) setRole('student');
+                      else setErrorMsg('Please enter your name and a 5-digit code.');
+                    }}
+                    className="w-1/3 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-emerald-500/25 active:scale-95"
+                  >
+                    Join
+                  </button>
                 </div>
-               </>
-            )}
+                
+                <div className="mt-8 pt-6 border-t border-slate-700 text-center">
+                    <button 
+                        onClick={() => setShowTeacherAuth(true)}
+                        className="text-slate-400 hover:text-white text-sm transition-colors"
+                    >
+                        Are you a teacher? <span className="text-blue-400 font-medium">Log in here</span>
+                    </button>
+                </div>
+              </div>
+          ) : (
+              <form onSubmit={handleTeacherAuthSubmit} className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                <div className="text-center mb-4">
+                    <h2 className="text-xl font-bold text-white">{isSignUp ? 'Create Teacher Account' : 'Teacher Login'}</h2>
+                    <p className="text-xs text-slate-400 mt-1">Your questions will be securely saved to your account.</p>
+                </div>
+                
+                <input 
+                  type="email" 
+                  placeholder="Email Address" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-slate-400"
+                />
+                <input 
+                  type="password" 
+                  placeholder="Password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-slate-400"
+                />
+                
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3 mt-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-slate-400 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-95 flex justify-center items-center gap-2"
+                >
+                  {authLoading ? 'Please wait...' : isSignUp ? 'Create Account & Start' : 'Log In & Start Class'}
+                </button>
 
-            <input 
-              type="text" 
-              placeholder="Student Name" 
-              value={studentName}
-              onChange={(e) => setStudentName(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-400"
-            />
-            <div className="flex gap-2">
-              <input 
-                type="text" 
-                placeholder="5-Digit Code" 
-                value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value.toUpperCase().trim().slice(0, 5))}
-                className="w-2/3 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-center text-lg tracking-widest placeholder-slate-400 font-mono"
-              />
-              <button 
-                onClick={() => {
-                  if (roomCode.length === 5 && studentName.trim()) setRole('student');
-                  else setErrorMsg('Please enter your name and a 5-digit code.');
-                }}
-                className="w-1/3 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-emerald-500/25 active:scale-95"
-              >
-                Join
-              </button>
-            </div>
-          </div>
+                <div className="flex flex-col items-center gap-4 mt-6 pt-4 border-t border-slate-700">
+                    <button 
+                        type="button"
+                        onClick={() => { setIsSignUp(!isSignUp); setErrorMsg(''); }}
+                        className="text-slate-400 hover:text-white text-sm transition-colors"
+                    >
+                        {isSignUp ? 'Already have an account? Log in' : 'Need an account? Sign up'}
+                    </button>
+                    <button 
+                        type="button"
+                        onClick={() => { setShowTeacherAuth(false); setErrorMsg(''); }}
+                        className="text-emerald-500 hover:text-emerald-400 text-sm font-medium transition-colors"
+                    >
+                        &larr; Back to Student Join
+                    </button>
+                </div>
+              </form>
+          )}
         </div>
       </div>
     );
   }
 
-  // Pass the user object to TeacherView so we can access their private question bank!
   return role === 'teacher' ? (
     <TeacherView user={user} roomCode={roomCode} />
   ) : (
@@ -212,9 +293,7 @@ function TeacherView({ user, roomCode }) {
   const [answers, setAnswers] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
   
-  // Permanent User Question Bank
   const [questionBank, setQuestionBank] = useState([]);
-  
   const [qType, setQType] = useState('mcq');
   const [qText, setQText] = useState('');
   const [qOptions, setQOptions] = useState(['', '']);
@@ -223,19 +302,21 @@ function TeacherView({ user, roomCode }) {
      window.open(`/?projector=true&code=${roomCode}`, 'ClassCastProjector', 'width=1280,height=720');
   };
 
+  const handleLogout = async () => {
+      await signOut(auth);
+      window.location.reload(); 
+  };
+
   useEffect(() => {
-    // 1. Listen for permanent question bank updates (Private to this Teacher)
     if (!user) return;
     const bankRef = collection(db, 'artifacts', appId, 'users', user.uid, 'questionBank');
     const unsubscribeBank = onSnapshot(bankRef, (snapshot) => {
        const qs = [];
        snapshot.forEach(doc => qs.push({ id: doc.id, ...doc.data() }));
-       // Sort by timestamp so newest is at the bottom
        qs.sort((a, b) => a.timestamp - b.timestamp);
        setQuestionBank(qs);
     });
 
-    // 2. Listen for student answers (Public for this room)
     let unsubscribeAnswers = () => {};
     if (activeQuestion) {
       const answersRef = collection(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers');
@@ -392,7 +473,6 @@ function TeacherView({ user, roomCode }) {
       };
       
       try {
-          // Save to personal, permanent collection
           const bankRef = collection(db, 'artifacts', appId, 'users', user.uid, 'questionBank');
           await addDoc(bankRef, newQuestion);
           setQText(''); setQOptions(['', '']); setErrorMsg('');
@@ -432,16 +512,27 @@ function TeacherView({ user, roomCode }) {
           <div>
             <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
                Teacher Dashboard
+               <span className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded-full border border-slate-600 font-normal">
+                   Logged in securely
+               </span>
             </h2>
             <p className="text-slate-400">Class Code: <span className="text-emerald-400 font-mono text-2xl font-bold tracking-widest ml-2 bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">{roomCode}</span></p>
           </div>
-          <button 
-             onClick={openProjector} 
-             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 active:scale-95"
-          >
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-             Launch Projector
-          </button>
+          <div className="flex gap-3">
+              <button 
+                 onClick={openProjector} 
+                 className="px-6 py-3 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 active:scale-95"
+              >
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                 Launch Projector
+              </button>
+              <button 
+                 onClick={handleLogout} 
+                 className="px-4 py-3 bg-slate-700 hover:bg-red-600 rounded-xl font-bold transition-all shadow-lg border border-slate-600 hover:border-red-500 active:scale-95"
+              >
+                 Log Out
+              </button>
+          </div>
         </div>
 
         {errorMsg && (
@@ -619,15 +710,15 @@ function TeacherView({ user, roomCode }) {
               <div className="flex-1 p-6 overflow-y-auto bg-slate-900/50">
                  <div className="flex justify-between items-center mb-4">
                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">My Saved Questions ({questionBank.length})</h4>
-                     <span className="text-[10px] bg-slate-700 text-slate-300 px-2 py-1 rounded-full border border-slate-600">Auto-saved</span>
+                     <span className="text-[10px] bg-emerald-900/50 text-emerald-400 px-2 py-1 rounded-full border border-emerald-800">Auto-synced securely</span>
                  </div>
                  
                  <div className="space-y-3">
                     {questionBank.length === 0 ? (
-                       <p className="text-slate-500 text-sm italic text-center mt-6">Build questions above to save them automatically.</p>
+                       <p className="text-slate-500 text-sm italic text-center mt-6">Questions saved here will permanently sync to your account.</p>
                     ) : (
                        questionBank.map((q) => (
-                          <div key={q.id} className="bg-slate-800 p-4 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-3 group">
+                          <div key={q.id} className="bg-slate-800 p-4 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-3 group hover:border-slate-500 transition-colors">
                              <div className="flex justify-between items-start gap-2">
                                 <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
                                 <span className="text-xs px-2 py-1 bg-slate-700 rounded text-slate-300 whitespace-nowrap">
@@ -641,8 +732,9 @@ function TeacherView({ user, roomCode }) {
                              <div className="flex gap-2 mt-1">
                                 <button 
                                    onClick={() => launchQuestion(q)}
-                                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg font-bold text-sm transition-colors shadow-md active:scale-95"
+                                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg font-bold text-sm transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
                                 >
+                                   <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                                    Launch Live
                                 </button>
                                 <button 
@@ -731,7 +823,7 @@ function StudentView({ user, roomCode, studentName }) {
   }, [activeSlide?.type, roomCode]); 
 
   const submitAnswer = async (payload) => {
-    if (!activeQuestion) return;
+    if (!activeQuestion || !user) return;
     setHasAnswered(true); 
     try {
       const answerRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers', user.uid);
@@ -1024,7 +1116,7 @@ function ProjectorView({ roomCode }) {
                {activeSlide.type === 'screen' ? (
                   <>
                      {!isPeerConnected && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-black">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-black pointer-events-none">
                            <div className="w-12 h-12 border-4 border-slate-700 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
                         </div>
                      )}
