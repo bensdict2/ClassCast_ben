@@ -17,7 +17,8 @@ import {
   onSnapshot, 
   collection,
   addDoc,
-  deleteDoc
+  deleteDoc,
+  getDoc
 } from 'firebase/firestore';
 
 const appId = 'my-classroom-app'; 
@@ -98,8 +99,6 @@ export default function App() {
   const projCode = urlParams.get('code');
 
   useEffect(() => {
-    // Only sign in anonymously initially if they aren't already logged in
-    // This allows students to use the app without accounts.
     const authenticate = async () => {
       try {
         if (!auth.currentUser) {
@@ -136,11 +135,9 @@ export default function App() {
           } else {
               await signInWithEmailAndPassword(auth, email, password);
           }
-          // On success, start the session
           setRoomCode(generateRoomCode());
           setRole('teacher');
       } catch (error) {
-          // Format Firebase errors to be user-friendly
           if (error.code === 'auth/email-already-in-use') setErrorMsg('This email is already registered. Please log in.');
           else if (error.code === 'auth/wrong-password') setErrorMsg('Incorrect password.');
           else if (error.code === 'auth/user-not-found') setErrorMsg('No account found with this email.');
@@ -227,12 +224,7 @@ export default function App() {
                 </div>
                 
                 <div className="mt-8 pt-6 border-t border-slate-700 text-center">
-                    <button 
-                        onClick={() => setShowTeacherAuth(true)}
-                        className="text-slate-400 hover:text-white text-sm transition-colors"
-                    >
-                        Are you a teacher? <span className="text-blue-400 font-medium">Log in here</span>
-                    </button>
+                   
                 </div>
               </div>
           ) : (
@@ -317,6 +309,20 @@ export default function App() {
     <StudentView user={user} roomCode={roomCode} studentName={studentName} />
   );
 }
+
+// Word Cloud Helper function
+const getWordCloudData = (answers) => {
+    const counts = {};
+    answers.forEach(a => {
+        const word = String(a.selectedOption || '').trim().toUpperCase();
+        if (word) counts[word] = (counts[word] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a,b) => b[1] - a[1]); 
+};
+
+// Beautiful colors for the word cloud
+const wordCloudColors = ['text-emerald-400', 'text-blue-400', 'text-orange-400', 'text-pink-400', 'text-purple-400', 'text-yellow-400'];
+
 
 function TeacherView({ user, roomCode }) {
   const [slideUrl, setSlideUrl] = useState('');
@@ -671,18 +677,35 @@ function TeacherView({ user, roomCode }) {
               </div>
               <p className="font-semibold text-white text-lg mb-4">{activeQuestion.text}</p>
               
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-700 flex-1 overflow-y-auto space-y-2">
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-700 flex-1 overflow-y-auto">
                  {answers.length === 0 ? (
                     <p className="text-slate-500 text-center italic text-sm mt-8">Waiting for student responses...</p>
+                 ) : activeQuestion.type === 'word_cloud' ? (
+                     <div className="flex flex-wrap justify-center items-center gap-4 py-4 min-h-[150px]">
+                         {getWordCloudData(answers).map(([word, count], i) => (
+                             <span 
+                                key={word} 
+                                style={{ 
+                                   fontSize: `${Math.min(1 + (count - 1) * 0.3, 3.5)}rem`,
+                                   opacity: Math.min(0.6 + count * 0.2, 1)
+                                }} 
+                                className={`font-black tracking-tight transition-all drop-shadow-md ${wordCloudColors[i % wordCloudColors.length]}`}
+                             >
+                                {word}
+                             </span>
+                         ))}
+                     </div>
                  ) : (
-                    answers.map((ans, idx) => (
-                      <div key={idx} className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex flex-col gap-1">
-                        <span className="font-medium text-slate-300 text-sm">{ans.studentName}</span>
-                        <span className="text-white font-bold bg-blue-500/20 px-3 py-1.5 rounded inline-block border border-blue-500/30 break-words">
-                          {Array.isArray(ans.selectedOption) ? ans.selectedOption.join(' ➔ ') : ans.selectedOption}
-                        </span>
-                      </div>
-                    ))
+                    <div className="space-y-2">
+                       {answers.map((ans, idx) => (
+                         <div key={idx} className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex flex-col gap-1">
+                           <span className="font-medium text-slate-300 text-sm">{ans.studentName}</span>
+                           <span className="text-white font-bold bg-blue-500/20 px-3 py-1.5 rounded inline-block border border-blue-500/30 break-words">
+                             {Array.isArray(ans.selectedOption) ? ans.selectedOption.join(' ➔ ') : ans.selectedOption}
+                           </span>
+                         </div>
+                       ))}
+                    </div>
                  )}
               </div>
            </div>
@@ -703,13 +726,14 @@ function TeacherView({ user, roomCode }) {
                     >
                        <option value="mcq">🔵 Multiple Choice</option>
                        <option value="short_answer">📝 Short Answer</option>
+                       <option value="word_cloud">☁️ Word Cloud</option>
                        <option value="thumbs">👍 Thumbs Up / Down</option>
                        <option value="temperature">🌡️ Temperature Check (Emoji)</option>
                        <option value="rank">🔢 Rank / Order Items</option>
                     </select>
 
                     <textarea 
-                      placeholder="Type your question here..." 
+                      placeholder={qType === 'word_cloud' ? "e.g. 'In one word, describe today's lesson...'" : "Type your question here..."}
                       value={qText}
                       onChange={(e) => setQText(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 h-20 resize-none"
@@ -762,6 +786,7 @@ function TeacherView({ user, roomCode }) {
                                 <span className="text-xs px-2 py-1 bg-slate-700 rounded text-slate-300 whitespace-nowrap">
                                    {q.type === 'mcq' && 'MCQ'}
                                    {q.type === 'short_answer' && 'Short Ans'}
+                                   {q.type === 'word_cloud' && 'Word Cloud'}
                                    {q.type === 'thumbs' && 'Thumbs'}
                                    {q.type === 'temperature' && 'Temp'}
                                    {q.type === 'rank' && 'Rank'}
@@ -957,6 +982,7 @@ function StudentView({ user, roomCode, studentName }) {
                         <div className="inline-block bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest mb-3 border border-orange-500/30 shadow-sm">
                           {activeQuestion.type === 'mcq' && 'Multiple Choice'}
                           {activeQuestion.type === 'short_answer' && 'Short Answer'}
+                          {activeQuestion.type === 'word_cloud' && 'Word Cloud'}
                           {activeQuestion.type === 'thumbs' && 'Quick Poll'}
                           {activeQuestion.type === 'temperature' && 'Temperature Check'}
                           {activeQuestion.type === 'rank' && 'Rank Order'}
@@ -997,6 +1023,26 @@ function StudentView({ user, roomCode, studentName }) {
                                   Submit Answer
                                </button>
                             </div>
+                         )}
+
+                         {activeQuestion.type === 'word_cloud' && (
+                             <div className="flex flex-col gap-4">
+                                <p className="text-slate-400 text-sm text-center">Type <b className="text-white">one</b> short word or phrase!</p>
+                                <input 
+                                   type="text" 
+                                   placeholder="e.g. Fantastic"
+                                   maxLength={25}
+                                   value={shortAnswerText}
+                                   onChange={(e) => setShortAnswerText(e.target.value)}
+                                   className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white text-xl text-center font-bold focus:outline-none focus:border-orange-500 shadow-inner uppercase tracking-wider"
+                                />
+                                <button 
+                                   onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
+                                   className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
+                                >
+                                   Send to Word Cloud
+                                </button>
+                             </div>
                          )}
 
                          {activeQuestion.type === 'thumbs' && (
@@ -1087,7 +1133,7 @@ function StudentView({ user, roomCode, studentName }) {
 function ProjectorView({ roomCode }) {
   const [activeSlide, setActiveSlide] = useState(null);
   const [activeQuestion, setActiveQuestion] = useState(null);
-
+  const [answers, setAnswers] = useState([]);
   const [isPeerConnected, setIsPeerConnected] = useState(false);
   const videoRef = useRef(null);
   const peerRef = useRef(null);
@@ -1103,6 +1149,19 @@ function ProjectorView({ roomCode }) {
     });
     return () => unsubscribe();
   }, [roomCode]);
+
+  useEffect(() => {
+    let unsubscribeAnswers = () => {};
+    if (activeQuestion) {
+      const answersRef = collection(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode, 'answers');
+      unsubscribeAnswers = onSnapshot(answersRef, (snapshot) => {
+        const results = [];
+        snapshot.forEach(doc => results.push(doc.data()));
+        setAnswers(results);
+      });
+    }
+    return () => unsubscribeAnswers();
+  }, [activeQuestion, roomCode]);
 
   useEffect(() => {
      if (activeSlide?.type === 'screen' && window.Peer && !isPeerConnected) {
@@ -1180,63 +1239,86 @@ function ProjectorView({ roomCode }) {
 
       {activeQuestion && (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/90 backdrop-blur-md transition-all duration-300 pointer-events-none">
-          <div className="bg-slate-800 rounded-[2rem] p-12 w-full max-w-5xl shadow-[0_0_60px_rgba(0,0,0,0.8)] border-2 border-slate-600 relative overflow-hidden">
+          <div className="bg-slate-800 rounded-[2rem] p-12 w-full max-w-5xl shadow-[0_0_60px_rgba(0,0,0,0.8)] border-2 border-slate-600 relative overflow-hidden flex flex-col max-h-[90vh]">
             <div className="absolute top-0 left-0 w-full h-3 bg-gradient-to-r from-orange-400 to-pink-500"></div>
             
-            <div className="text-center mb-12 mt-4">
+            <div className="text-center mb-12 mt-4 flex-shrink-0">
                <div className="inline-block bg-orange-500/20 text-orange-400 px-6 py-2 rounded-full text-lg font-bold uppercase tracking-widest mb-6 border border-orange-500/30">
                  Live Class Activity
                </div>
                <h2 className="text-6xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
             </div>
             
-            {activeQuestion.type === 'mcq' && (
-              <div className="grid grid-cols-2 gap-8">
-                {activeQuestion.options.map((option, idx) => (
-                  <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-4xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
-                    {option}
-                  </div>
-                ))}
-              </div>
-            )}
-            
-            {activeQuestion.type === 'short_answer' && (
-               <div className="text-center py-12 bg-slate-900 border-2 border-dashed border-slate-600 rounded-3xl">
-                  <p className="text-4xl text-slate-400 font-medium italic">✍️ Type your answers on your device...</p>
-               </div>
-            )}
+            <div className="flex-1 overflow-y-auto">
+                {activeQuestion.type === 'word_cloud' && (
+                    <div className="flex flex-wrap justify-center items-center gap-6 h-full p-8 bg-slate-900 rounded-[2rem] border-2 border-dashed border-slate-600">
+                        {answers.length === 0 ? (
+                           <p className="text-4xl text-slate-500 italic">Waiting for words...</p>
+                        ) : (
+                           getWordCloudData(answers).map(([word, count], i) => (
+                               <span 
+                                  key={word} 
+                                  style={{ 
+                                     fontSize: `${Math.min(3 + (count - 1) * 1.5, 9)}rem`,
+                                     opacity: Math.min(0.6 + count * 0.2, 1)
+                                  }} 
+                                  className={`font-black tracking-tight transition-all duration-500 drop-shadow-xl ${wordCloudColors[i % wordCloudColors.length]}`}
+                               >
+                                  {word}
+                               </span>
+                           ))
+                        )}
+                    </div>
+                )}
 
-            {activeQuestion.type === 'thumbs' && (
-               <div className="flex gap-12 justify-center">
-                  <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
-                     <span className="text-8xl">👍</span><span className="text-white text-3xl font-bold mt-4">Yes / Agree</span>
+                {activeQuestion.type === 'mcq' && (
+                  <div className="grid grid-cols-2 gap-8">
+                    {activeQuestion.options.map((option, idx) => (
+                      <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-4xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
+                        {option}
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
-                     <span className="text-8xl">👎</span><span className="text-white text-3xl font-bold mt-4">No / Disagree</span>
-                  </div>
-               </div>
-            )}
+                )}
+                
+                {activeQuestion.type === 'short_answer' && (
+                   <div className="text-center py-12 bg-slate-900 border-2 border-dashed border-slate-600 rounded-3xl">
+                      <p className="text-4xl text-slate-400 font-medium italic">✍️ Type your answers on your device...</p>
+                   </div>
+                )}
 
-            {activeQuestion.type === 'temperature' && (
-               <div className="flex justify-center gap-8">
-                  {['🥵', '😕', '😐', '🙂', '🤩'].map((emoji, idx) => (
-                     <div key={idx} className="bg-slate-700 p-8 rounded-full border-2 border-slate-600 flex items-center justify-center w-32 h-32 text-6xl shadow-xl">
-                        {emoji}
-                     </div>
-                  ))}
-               </div>
-            )}
+                {activeQuestion.type === 'thumbs' && (
+                   <div className="flex gap-12 justify-center">
+                      <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
+                         <span className="text-8xl">👍</span><span className="text-white text-3xl font-bold mt-4">Yes / Agree</span>
+                      </div>
+                      <div className="flex flex-col items-center gap-4 bg-slate-700 p-12 rounded-[3rem] border-2 border-slate-600">
+                         <span className="text-8xl">👎</span><span className="text-white text-3xl font-bold mt-4">No / Disagree</span>
+                      </div>
+                   </div>
+                )}
 
-            {activeQuestion.type === 'rank' && (
-               <div className="flex flex-wrap gap-4 justify-center">
-                  {activeQuestion.options.map((opt, idx) => (
-                     <div key={idx} className="bg-slate-700 text-white text-3xl font-bold py-6 px-10 rounded-2xl border-2 border-slate-500 shadow-lg">
-                        {opt}
-                     </div>
-                  ))}
-                  <p className="w-full text-center text-slate-400 text-2xl mt-8">🔢 Tap items in order on your screen to rank them!</p>
-               </div>
-            )}
+                {activeQuestion.type === 'temperature' && (
+                   <div className="flex justify-center gap-8">
+                      {['🥵', '😕', '😐', '🙂', '🤩'].map((emoji, idx) => (
+                         <div key={idx} className="bg-slate-700 p-8 rounded-full border-2 border-slate-600 flex items-center justify-center w-32 h-32 text-6xl shadow-xl">
+                            {emoji}
+                         </div>
+                      ))}
+                   </div>
+                )}
+
+                {activeQuestion.type === 'rank' && (
+                   <div className="flex flex-wrap gap-4 justify-center">
+                      {activeQuestion.options.map((opt, idx) => (
+                         <div key={idx} className="bg-slate-700 text-white text-3xl font-bold py-6 px-10 rounded-2xl border-2 border-slate-500 shadow-lg">
+                            {opt}
+                         </div>
+                      ))}
+                      <p className="w-full text-center text-slate-400 text-2xl mt-8">🔢 Tap items in order on your screen to rank them!</p>
+                   </div>
+                )}
+            </div>
           </div>
         </div>
       )}
