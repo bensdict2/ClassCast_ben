@@ -165,8 +165,8 @@ export default function App() {
 
   if (!user || !isPeerLoaded) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-        <div className="animate-pulse text-xl font-semibold text-emerald-400">Loading Classroom Environment...</div>
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white p-4">
+        <div className="animate-pulse text-lg md:text-xl font-semibold text-emerald-400 text-center">Loading Classroom Environment...</div>
       </div>
     );
   }
@@ -178,15 +178,15 @@ export default function App() {
   if (!role) {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-4 font-sans">
-        <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 relative overflow-hidden">
+        <div className="max-w-md w-full bg-slate-800 p-6 md:p-8 rounded-2xl shadow-2xl border border-slate-700 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-blue-500"></div>
           
           <div className="text-center mb-8">
-              <h1 className="text-4xl font-extrabold mb-2 text-white flex items-center justify-center gap-3">
-                 <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+              <h1 className="text-3xl md:text-4xl font-extrabold mb-2 text-white flex items-center justify-center gap-3">
+                 <svg className="w-8 h-8 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                  ClassCast
               </h1>
-              <p className="text-slate-400 text-sm">Interactive Cloud Presentation</p>
+              <p className="text-slate-400 text-xs md:text-sm">Interactive Cloud Presentation</p>
           </div>
           
           {errorMsg && (
@@ -224,7 +224,12 @@ export default function App() {
                 </div>
                 
                 <div className="mt-8 pt-6 border-t border-slate-700 text-center">
-                   
+                    <button 
+                        onClick={() => setShowTeacherAuth(true)}
+                        className="text-slate-400 hover:text-blue-400 text-sm transition-colors"
+                    >
+                        Teacher Login / Register
+                    </button>
                 </div>
               </div>
           ) : (
@@ -323,10 +328,11 @@ const getWordCloudData = (answers) => {
 // Beautiful colors for the word cloud
 const wordCloudColors = ['text-emerald-400', 'text-blue-400', 'text-orange-400', 'text-pink-400', 'text-purple-400', 'text-yellow-400'];
 
-
 function TeacherView({ user, roomCode }) {
   const [slideUrl, setSlideUrl] = useState('');
   const [activeSlide, setActiveSlide] = useState(null);
+  const [slideNotes, setSlideNotes] = useState({}); // Stores all notes keyed by page number
+  const [currentNote, setCurrentNote] = useState(''); 
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   
   const videoRef = useRef(null);
@@ -351,14 +357,25 @@ function TeacherView({ user, roomCode }) {
       window.location.reload(); 
   };
 
+  // Sync Notes & Banks
   useEffect(() => {
     if (!user) return;
+    
+    // Sync Question Bank
     const bankRef = collection(db, 'artifacts', appId, 'users', user.uid, 'questionBank');
     const unsubscribeBank = onSnapshot(bankRef, (snapshot) => {
        const qs = [];
        snapshot.forEach(doc => qs.push({ id: doc.id, ...doc.data() }));
        qs.sort((a, b) => a.timestamp - b.timestamp);
        setQuestionBank(qs);
+    });
+
+    // Sync Session Data (Including notes)
+    const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+    const unsubscribeSession = onSnapshot(sessionRef, (docSnap) => {
+        if (docSnap.exists() && docSnap.data().slideNotes) {
+            setSlideNotes(docSnap.data().slideNotes);
+        }
     });
 
     let unsubscribeAnswers = () => {};
@@ -373,10 +390,21 @@ function TeacherView({ user, roomCode }) {
     
     return () => {
         unsubscribeBank();
+        unsubscribeSession();
         unsubscribeAnswers();
     };
   }, [activeQuestion, roomCode, user]);
 
+  // Sync active slide note to textarea
+  useEffect(() => {
+     if (activeSlide && activeSlide.page) {
+         setCurrentNote(slideNotes[activeSlide.page] || '');
+     } else {
+         setCurrentNote('');
+     }
+  }, [activeSlide?.page, slideNotes]);
+
+  // Clicker / Keyboard listener
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
@@ -394,6 +422,15 @@ function TeacherView({ user, roomCode }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeSlide, roomCode]);
+
+  const saveNoteToFirebase = async (text) => {
+      if (!activeSlide || !activeSlide.page) return;
+      setCurrentNote(text);
+      try {
+          const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+          await setDoc(sessionRef, { slideNotes: { [activeSlide.page]: text } }, { merge: true });
+      } catch(err) { console.error("Failed to save note", err); }
+  };
 
   const pushSlide = async () => {
     if (!slideUrl) return;
@@ -414,14 +451,19 @@ function TeacherView({ user, roomCode }) {
   const changePage = async (delta) => {
     if (!activeSlide || activeSlide.type === 'screen') return;
     const newPage = Math.max(1, (activeSlide.page || 1) + delta);
-    try {
-      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
-      const slideData = { ...activeSlide, page: newPage, timestamp: Date.now() };
-      await setDoc(sessionRef, { activeSlide: slideData }, { merge: true });
-      setActiveSlide(slideData);
-    } catch (err) {
-      console.error("Failed to change page:", err);
-    }
+    jumpToPage(newPage);
+  };
+
+  const jumpToPage = async (pageNumber) => {
+      if (!activeSlide || activeSlide.type === 'screen') return;
+      try {
+          const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
+          const slideData = { ...activeSlide, page: pageNumber, timestamp: Date.now() };
+          await setDoc(sessionRef, { activeSlide: slideData }, { merge: true });
+          setActiveSlide(slideData);
+      } catch (err) {
+          console.error("Failed to jump page:", err);
+      }
   };
 
   const clearSlide = async () => {
@@ -547,274 +589,361 @@ function TeacherView({ user, roomCode }) {
     } catch (err) {}
   };
 
+  // Generate an array of page numbers to render in the scanner bar
+  const generateSlidePickerList = () => {
+      if (!activeSlide || activeSlide.type !== 'link') return [];
+      const current = activeSlide.page || 1;
+      const maxToRender = Math.max(30, current + 10);
+      return Array.from({length: maxToRender}, (_, i) => i + 1);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col md:flex-row gap-6 font-sans">
+    <div className="h-screen bg-slate-900 text-white flex flex-col overflow-hidden font-sans">
       
-      <div className="flex-1 flex flex-col gap-6">
-        <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex justify-between items-center relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
-          <div>
-            <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-               Teacher Dashboard
-               <span className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded-full border border-slate-600 font-normal">
-                   Logged in securely
+      {/* Top Navbar */}
+      <div className="bg-slate-800 p-4 shadow-xl border-b border-slate-700 flex flex-wrap justify-between items-center gap-4 flex-shrink-0 relative">
+         <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
+         <div>
+            <h2 className="text-xl md:text-2xl font-bold text-slate-100 flex items-center gap-2">
+               Teacher Console
+               <span className="hidden md:inline-block text-[10px] uppercase tracking-wider bg-slate-700 text-slate-300 px-2 py-1 rounded-full border border-slate-600 font-normal">
+                   Secure Mode
                </span>
             </h2>
-            <p className="text-slate-400">Class Code: <span className="text-emerald-400 font-mono text-2xl font-bold tracking-widest ml-2 bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">{roomCode}</span></p>
-          </div>
-          <div className="flex gap-3">
-              <button 
-                 onClick={openProjector} 
-                 className="px-6 py-3 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 active:scale-95"
-              >
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-                 Launch Projector
-              </button>
-              <button 
-                 onClick={handleLogout} 
-                 className="px-4 py-3 bg-slate-700 hover:bg-red-600 rounded-xl font-bold transition-all shadow-lg border border-slate-600 hover:border-red-500 active:scale-95"
-              >
-                 Log Out
-              </button>
-          </div>
-        </div>
-
-        {errorMsg && (
-          <div className="bg-red-900/50 border border-red-500 text-red-200 p-4 rounded-xl shadow-lg">
-            {errorMsg}
-          </div>
-        )}
-
-        <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex flex-col gap-4 flex-1">
-           <h3 className="text-xl font-bold text-slate-100 border-b border-slate-700 pb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                 <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                 Cloud Presentation Sync
-              </div>
-           </h3>
-           
-           <div className="flex gap-3">
-              <input 
-                 type="text" 
-                 placeholder="Paste Google Slides or Image Link..." 
-                 value={slideUrl}
-                 onChange={(e) => setSlideUrl(e.target.value)}
-                 className="flex-1 bg-slate-900 border border-slate-600 rounded-xl p-4 text-white focus:outline-none focus:border-emerald-500 font-mono text-sm"
-              />
-              <button 
-                 onClick={pushSlide}
-                 className="px-6 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap"
-              >
-                 Sync Link
-              </button>
-              <div className="border-l border-slate-600 mx-2"></div>
-              {!isBroadcasting ? (
-                 <button 
-                    onClick={startBroadcast}
-                    className="px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
-                 >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                    Share Screen
-                 </button>
-              ) : (
-                 <button 
-                    onClick={stopBroadcast}
-                    className="px-6 py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap animate-pulse"
-                 >
-                    Stop Sharing
-                 </button>
-              )}
-           </div>
-
-           <div className="flex-1 bg-black rounded-xl overflow-hidden border border-slate-700 relative flex items-center justify-center min-h-[350px]">
-              {activeSlide ? (
-                 <>
-                    <div className="absolute top-2 left-2 bg-black/60 px-3 py-1 rounded-md text-xs font-mono z-20 flex gap-2 shadow-lg backdrop-blur-sm border border-slate-600">
-                       <span className="text-emerald-400 flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Live on student screens</span>
-                       <button onClick={clearSlide} className="text-red-400 hover:text-red-300 ml-2 underline border-l border-slate-600 pl-4">Clear Screen</button>
-                    </div>
-                    
-                    {activeSlide.type === 'screen' ? (
-                       <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
-                    ) : parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' ? (
-                       <div className="w-full h-full flex flex-col relative">
-                          <iframe 
-                            src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
-                            className="w-full flex-1 border-0 bg-white" 
-                            allowFullScreen
-                          />
-                          {activeSlide.url.includes('docs.google.com/presentation') && (
-                              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-900/95 p-3 rounded-2xl border-2 border-slate-600 flex items-center gap-6 z-30 shadow-2xl backdrop-blur-md">
-                                 <button onClick={() => changePage(-1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">&larr; Prev</button>
-                                 <span className="text-emerald-400 font-bold whitespace-nowrap text-lg">Slide {activeSlide.page || 1}</span>
-                                 <button onClick={() => changePage(1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white font-bold transition-all shadow-md active:scale-95">Next &rarr;</button>
-                              </div>
-                          )}
-                       </div>
-                    ) : (
-                       <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" alt="Preview" />
-                    )}
-                 </>
-              ) : (
-                 <div className="text-center text-slate-500">
-                    <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                    <p>Paste a link or share your screen above.</p>
-                 </div>
-              )}
-           </div>
-        </div>
+            <p className="text-slate-400 text-sm mt-1">Class Code: <span className="text-emerald-400 font-mono text-lg md:text-xl font-bold tracking-widest ml-2 bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">{roomCode}</span></p>
+         </div>
+         <div className="flex gap-2 md:gap-3 flex-wrap">
+            <button 
+               onClick={openProjector} 
+               className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center gap-2 active:scale-95"
+            >
+               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+               <span className="hidden sm:inline">Launch Projector</span>
+               <span className="sm:hidden">Projector</span>
+            </button>
+            <button 
+               onClick={handleLogout} 
+               className="px-4 py-2 bg-slate-700 hover:bg-red-600 rounded-xl font-bold text-sm transition-all shadow-lg border border-slate-600 hover:border-red-500 active:scale-95"
+            >
+               Log Out
+            </button>
+         </div>
       </div>
 
-      <div className="w-full md:w-[450px] flex flex-col gap-6">
-        {activeQuestion && (
-           <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border-2 border-orange-500 relative overflow-hidden animate-in fade-in flex flex-col min-h-[300px]">
-              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
-              <div className="flex justify-between items-center mb-4">
-                 <h3 className="text-xl font-bold text-orange-400 flex items-center gap-2">
-                   <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div> Live Session
-                 </h3>
-                 <button onClick={clearQuestion} className="text-sm bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-white border border-slate-600">Close Question</button>
-              </div>
-              <p className="font-semibold text-white text-lg mb-4">{activeQuestion.text}</p>
-              
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-700 flex-1 overflow-y-auto">
-                 {answers.length === 0 ? (
-                    <p className="text-slate-500 text-center italic text-sm mt-8">Waiting for student responses...</p>
-                 ) : activeQuestion.type === 'word_cloud' ? (
-                     <div className="flex flex-wrap justify-center items-center gap-4 py-4 min-h-[150px]">
-                         {getWordCloudData(answers).map(([word, count], i) => (
-                             <span 
-                                key={word} 
-                                style={{ 
-                                   fontSize: `${Math.min(1 + (count - 1) * 0.3, 3.5)}rem`,
-                                   opacity: Math.min(0.6 + count * 0.2, 1)
-                                }} 
-                                className={`font-black tracking-tight transition-all drop-shadow-md ${wordCloudColors[i % wordCloudColors.length]}`}
-                             >
-                                {word}
-                             </span>
-                         ))}
+      {errorMsg && (
+         <div className="bg-red-900/50 border-b border-red-500 text-red-200 p-3 text-sm text-center shadow-lg flex-shrink-0">
+           {errorMsg}
+         </div>
+      )}
+
+      {/* Main Responsive Grid Container */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+         
+         {/* Left Column: Presentation & Controls (Expands to fill) */}
+         <div className="flex-[2] flex flex-col border-r border-slate-700 bg-black overflow-hidden relative">
+            
+            {/* Input Bar (Hidden if presentation active to save space) */}
+            {!activeSlide && (
+               <div className="p-4 bg-slate-800 border-b border-slate-700 flex-shrink-0">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                     <input 
+                        type="text" 
+                        placeholder="Paste Google Slides or Image Link..." 
+                        value={slideUrl}
+                        onChange={(e) => setSlideUrl(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-emerald-500 font-mono text-sm"
+                     />
+                     <div className="flex gap-2">
+                         <button 
+                            onClick={pushSlide}
+                            className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap flex-1 sm:flex-none"
+                         >
+                            Sync Link
+                         </button>
+                         {!isBroadcasting ? (
+                            <button 
+                               onClick={startBroadcast}
+                               className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center justify-center gap-2 flex-1 sm:flex-none"
+                            >
+                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                               Share
+                            </button>
+                         ) : (
+                            <button 
+                               onClick={stopBroadcast}
+                               className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap animate-pulse flex-1 sm:flex-none"
+                            >
+                               Stop
+                            </button>
+                         )}
                      </div>
-                 ) : (
-                    <div className="space-y-2">
-                       {answers.map((ans, idx) => (
-                         <div key={idx} className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex flex-col gap-1">
-                           <span className="font-medium text-slate-300 text-sm">{ans.studentName}</span>
-                           <span className="text-white font-bold bg-blue-500/20 px-3 py-1.5 rounded inline-block border border-blue-500/30 break-words">
-                             {Array.isArray(ans.selectedOption) ? ans.selectedOption.join(' ➔ ') : ans.selectedOption}
-                           </span>
-                         </div>
-                       ))}
+                  </div>
+               </div>
+            )}
+
+            {/* Main Video/Iframe Container */}
+            <div className="flex-1 relative flex items-center justify-center min-h-0 bg-black">
+               {activeSlide ? (
+                  <>
+                     <div className="absolute top-4 left-4 bg-black/70 px-3 py-1.5 rounded-lg text-xs font-mono z-20 flex items-center gap-3 shadow-lg backdrop-blur-md border border-slate-600/50">
+                        <span className="text-emerald-400 flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> 
+                            Live on screens
+                        </span>
+                        <button onClick={clearSlide} className="text-red-400 hover:text-red-300 font-bold border-l border-slate-600/50 pl-3">Clear</button>
+                     </div>
+                     
+                     {activeSlide.type === 'screen' ? (
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+                     ) : parseMediaUrl(activeSlide.url, activeSlide.page)?.type === 'iframe' ? (
+                        <div className="w-full h-full flex flex-col relative">
+                           <iframe 
+                             src={parseMediaUrl(activeSlide.url, activeSlide.page).src} 
+                             className="w-full h-full border-0 bg-white" 
+                             allowFullScreen
+                           />
+                        </div>
+                     ) : (
+                        <img src={parseMediaUrl(activeSlide.url, activeSlide.page).src} className="w-full h-full object-contain" alt="Preview" />
+                     )}
+                  </>
+               ) : (
+                  <div className="text-center text-slate-500 p-4">
+                     <svg className="w-16 h-16 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                     <p>Ready for presentation.</p>
+                  </div>
+               )}
+            </div>
+
+            {/* Slide Navigation & Picker (Only shows for Links) */}
+            {activeSlide && activeSlide.type === 'link' && activeSlide.url.includes('docs.google.com/presentation') && (
+                <div className="bg-slate-800 border-t border-slate-700 flex-shrink-0 shadow-[0_-10px_20px_rgba(0,0,0,0.3)] z-20">
+                    <div className="flex items-center justify-between p-3 border-b border-slate-700/50 bg-slate-900/50">
+                        <button onClick={() => changePage(-1)} className="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-bold transition-all shadow-md active:scale-95 text-sm">&larr; Prev</button>
+                        <span className="text-emerald-400 font-bold tracking-widest uppercase text-sm">Slide {activeSlide.page || 1}</span>
+                        <button onClick={() => changePage(1)} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-bold transition-all shadow-md active:scale-95 text-sm">Next &rarr;</button>
                     </div>
-                 )}
-              </div>
-           </div>
-        )}
+                    {/* Slide Scanner Horizontal Scroll */}
+                    <div className="flex overflow-x-auto gap-2 p-3 hide-scrollbar items-center">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-2 pr-4 flex-shrink-0">Jump To:</span>
+                        {generateSlidePickerList().map((num) => (
+                           <button
+                              key={num}
+                              onClick={() => jumpToPage(num)}
+                              className={`flex-shrink-0 w-10 h-10 rounded-lg font-bold text-sm transition-all flex items-center justify-center border
+                                 ${(activeSlide.page || 1) === num 
+                                     ? 'bg-emerald-600 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.4)] scale-110 mx-2' 
+                                     : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600 hover:text-white'}`}
+                           >
+                              {num}
+                           </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+         </div>
 
-        {!activeQuestion && (
-           <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 flex flex-col flex-1 overflow-hidden">
-              <div className="p-6 border-b border-slate-700 bg-slate-800/50">
-                 <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                    <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                    Question Builder
-                 </h3>
-                 <div className="space-y-4">
-                    <select 
-                       value={qType} 
-                       onChange={(e) => setQType(e.target.value)}
-                       className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 appearance-none font-medium"
-                    >
-                       <option value="mcq">🔵 Multiple Choice</option>
-                       <option value="short_answer">📝 Short Answer</option>
-                       <option value="word_cloud">☁️ Word Cloud</option>
-                       <option value="thumbs">👍 Thumbs Up / Down</option>
-                       <option value="temperature">🌡️ Temperature Check (Emoji)</option>
-                       <option value="rank">🔢 Rank / Order Items</option>
-                    </select>
-
-                    <textarea 
-                      placeholder={qType === 'word_cloud' ? "e.g. 'In one word, describe today's lesson...'" : "Type your question here..."}
-                      value={qText}
-                      onChange={(e) => setQText(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 h-20 resize-none"
-                    />
-
-                    {(qType === 'mcq' || qType === 'rank') && (
-                       <div className="space-y-2">
-                          {qOptions.map((opt, i) => (
-                             <div key={i} className="flex gap-2">
-                                <input 
-                                   type="text" 
-                                   placeholder={`Option ${i + 1}`}
-                                   value={opt}
-                                   onChange={(e) => updateOption(i, e.target.value)}
-                                   className="flex-1 bg-slate-900 border border-slate-600 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm"
+         {/* Right Column: Next Slide Preview, Notes, & Question Bank */}
+         <div className="flex-[1.2] lg:max-w-md xl:max-w-lg flex flex-col bg-slate-800 min-h-0 overflow-y-auto border-t lg:border-t-0">
+            
+            {/* Presenter Mode Panels (Only active if presentation is running) */}
+            {activeSlide && activeSlide.type === 'link' && activeSlide.url.includes('docs.google.com/presentation') && (
+                <div className="flex flex-col border-b border-slate-700 bg-slate-900/30">
+                    
+                    {/* Next Slide Preview */}
+                    <div className="p-4 border-b border-slate-700 flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                            <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                            Up Next (Slide {(activeSlide.page || 1) + 1})
+                        </h4>
+                        <div className="w-full aspect-video bg-black rounded-lg border border-slate-600 overflow-hidden relative group shadow-inner">
+                            {/* CSS Scaling Trick to create a thumbnail iframe */}
+                            <div className="absolute top-0 left-0 w-[200%] h-[200%] origin-top-left scale-50 pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
+                                <iframe 
+                                    src={parseMediaUrl(activeSlide.url, (activeSlide.page || 1) + 1).src} 
+                                    className="w-full h-full border-0"
                                 />
-                                {qOptions.length > 2 && (
-                                   <button onClick={() => removeOption(i)} className="p-2 bg-red-900/50 text-red-400 hover:bg-red-500 hover:text-white rounded-lg border border-red-500/30 transition-colors">✕</button>
-                                )}
-                             </div>
-                          ))}
-                          <button onClick={addOption} className="text-sm text-blue-400 hover:text-blue-300 font-medium">+ Add Option</button>
-                       </div>
-                    )}
+                            </div>
+                        </div>
+                    </div>
 
-                    <button 
-                      onClick={saveToBank}
-                      className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all shadow-lg text-white active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
-                      Save to Private Bank
-                    </button>
-                 </div>
-              </div>
+                    {/* Presenter Notes */}
+                    <div className="p-4 flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                            <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                            Presenter Notes (Slide {activeSlide.page || 1})
+                        </h4>
+                        <textarea 
+                            value={currentNote}
+                            onChange={(e) => saveNoteToFirebase(e.target.value)}
+                            placeholder="Type private notes for this slide here. They auto-save..."
+                            className="w-full h-24 bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm text-yellow-100 focus:outline-none focus:border-yellow-500 resize-none shadow-inner custom-scrollbar"
+                        />
+                    </div>
+                </div>
+            )}
 
-              <div className="flex-1 p-6 overflow-y-auto bg-slate-900/50">
-                 <div className="flex justify-between items-center mb-4">
-                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">My Saved Questions ({questionBank.length})</h4>
-                     <span className="text-[10px] bg-emerald-900/50 text-emerald-400 px-2 py-1 rounded-full border border-emerald-800">Auto-synced securely</span>
-                 </div>
-                 
-                 <div className="space-y-3">
-                    {questionBank.length === 0 ? (
-                       <p className="text-slate-500 text-sm italic text-center mt-6">Questions saved here will permanently sync to your account.</p>
-                    ) : (
-                       questionBank.map((q) => (
-                          <div key={q.id} className="bg-slate-800 p-4 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-3 group hover:border-slate-500 transition-colors">
-                             <div className="flex justify-between items-start gap-2">
-                                <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
-                                <span className="text-xs px-2 py-1 bg-slate-700 rounded text-slate-300 whitespace-nowrap">
-                                   {q.type === 'mcq' && 'MCQ'}
-                                   {q.type === 'short_answer' && 'Short Ans'}
-                                   {q.type === 'word_cloud' && 'Word Cloud'}
-                                   {q.type === 'thumbs' && 'Thumbs'}
-                                   {q.type === 'temperature' && 'Temp'}
-                                   {q.type === 'rank' && 'Rank'}
-                                </span>
+            {/* Live Question Activity Panel */}
+            {activeQuestion && (
+               <div className="p-4 bg-slate-800 border-b-2 border-orange-500 relative overflow-hidden flex flex-col">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-400 to-pink-500"></div>
+                  <div className="flex justify-between items-center mb-3">
+                     <h3 className="text-sm font-bold text-orange-400 flex items-center gap-2 uppercase tracking-wider">
+                       <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div> Live Session
+                     </h3>
+                     <button onClick={clearQuestion} className="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-white border border-slate-600 shadow-sm">Close</button>
+                  </div>
+                  <p className="font-semibold text-white text-base mb-3 leading-tight">{activeQuestion.text}</p>
+                  
+                  <div className="bg-slate-900 rounded-xl p-3 border border-slate-700 flex-1 max-h-64 overflow-y-auto custom-scrollbar">
+                     {answers.length === 0 ? (
+                        <p className="text-slate-500 text-center italic text-xs mt-4">Waiting for responses...</p>
+                     ) : activeQuestion.type === 'word_cloud' ? (
+                         <div className="flex flex-wrap justify-center items-center gap-3 py-2 min-h-[100px]">
+                             {getWordCloudData(answers).map(([word, count], i) => (
+                                 <span 
+                                    key={word} 
+                                    style={{ 
+                                       fontSize: `${Math.min(1 + (count - 1) * 0.3, 2.5)}rem`,
+                                       opacity: Math.min(0.6 + count * 0.2, 1)
+                                    }} 
+                                    className={`font-black tracking-tight transition-all drop-shadow-md leading-none ${wordCloudColors[i % wordCloudColors.length]}`}
+                                 >
+                                    {word}
+                                 </span>
+                             ))}
+                         </div>
+                     ) : (
+                        <div className="space-y-2">
+                           {answers.map((ans, idx) => (
+                             <div key={idx} className="bg-slate-800 p-2.5 rounded-lg border border-slate-700 flex flex-col gap-1 shadow-sm">
+                               <span className="font-medium text-slate-300 text-xs">{ans.studentName}</span>
+                               <span className="text-white font-bold text-sm bg-blue-500/20 px-2 py-1 rounded inline-block border border-blue-500/30 break-words">
+                                 {Array.isArray(ans.selectedOption) ? ans.selectedOption.join(' ➔ ') : ans.selectedOption}
+                               </span>
                              </div>
-                             <div className="flex gap-2 mt-1">
-                                <button 
-                                   onClick={() => launchQuestion(q)}
-                                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg font-bold text-sm transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
-                                >
-                                   <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                                   Launch Live
-                                </button>
-                                <button 
-                                   onClick={() => deleteFromBank(q.id)}
-                                   className="px-3 bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white rounded-lg transition-colors border border-slate-600"
-                                >
-                                   ✕
-                                </button>
-                             </div>
-                          </div>
-                       ))
-                    )}
-                 </div>
-              </div>
-           </div>
-        )}
+                           ))}
+                        </div>
+                     )}
+                  </div>
+               </div>
+            )}
+
+            {/* Question Builder & Bank */}
+            {!activeQuestion && (
+               <div className="flex flex-col flex-1 min-h-0">
+                  <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex-shrink-0">
+                     <h3 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                        Question Builder
+                     </h3>
+                     <div className="space-y-3">
+                        <select 
+                           value={qType} 
+                           onChange={(e) => setQType(e.target.value)}
+                           className="w-full bg-slate-900 border border-slate-600 rounded-xl p-2.5 text-white text-sm focus:outline-none focus:border-blue-500 appearance-none font-medium shadow-inner"
+                        >
+                           <option value="mcq">🔵 Multiple Choice</option>
+                           <option value="short_answer">📝 Short Answer</option>
+                           <option value="word_cloud">☁️ Word Cloud</option>
+                           <option value="thumbs">👍 Thumbs Up / Down</option>
+                           <option value="temperature">🌡️ Temperature Check (Emoji)</option>
+                           <option value="rank">🔢 Rank / Order Items</option>
+                        </select>
+
+                        <textarea 
+                          placeholder={qType === 'word_cloud' ? "e.g. 'In one word, describe today's lesson...'" : "Type your question here..."}
+                          value={qText}
+                          onChange={(e) => setQText(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-blue-500 h-16 resize-none shadow-inner custom-scrollbar"
+                        />
+
+                        {(qType === 'mcq' || qType === 'rank') && (
+                           <div className="space-y-2">
+                              {qOptions.map((opt, i) => (
+                                 <div key={i} className="flex gap-2">
+                                    <input 
+                                       type="text" 
+                                       placeholder={`Option ${i + 1}`}
+                                       value={opt}
+                                       onChange={(e) => updateOption(i, e.target.value)}
+                                       className="flex-1 bg-slate-900 border border-slate-600 rounded-lg p-2 text-white focus:outline-none focus:border-blue-500 text-sm shadow-inner"
+                                    />
+                                    {qOptions.length > 2 && (
+                                       <button onClick={() => removeOption(i)} className="p-2 bg-red-900/50 text-red-400 hover:bg-red-500 hover:text-white rounded-lg border border-red-500/30 transition-colors shadow-sm">✕</button>
+                                    )}
+                                 </div>
+                              ))}
+                              <button onClick={addOption} className="text-xs text-blue-400 hover:text-blue-300 font-medium">+ Add Option</button>
+                           </div>
+                        )}
+
+                        <button 
+                          onClick={saveToBank}
+                          className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-sm transition-all shadow-lg text-white active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                          Save to Private Bank
+                        </button>
+                     </div>
+                  </div>
+
+                  <div className="flex-1 p-4 overflow-y-auto bg-slate-900/30 custom-scrollbar">
+                     <div className="flex justify-between items-center mb-3">
+                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saved ({questionBank.length})</h4>
+                         <span className="text-[10px] bg-emerald-900/50 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-800">Auto-synced</span>
+                     </div>
+                     
+                     <div className="space-y-3">
+                        {questionBank.length === 0 ? (
+                           <p className="text-slate-500 text-xs italic text-center mt-6">Questions saved here permanently sync to your account.</p>
+                        ) : (
+                           questionBank.map((q) => (
+                              <div key={q.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
+                                 <div className="flex justify-between items-start gap-2">
+                                    <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 whitespace-nowrap uppercase font-bold tracking-wider">
+                                       {q.type === 'mcq' && 'MCQ'}
+                                       {q.type === 'short_answer' && 'Short'}
+                                       {q.type === 'word_cloud' && 'Cloud'}
+                                       {q.type === 'thumbs' && 'Poll'}
+                                       {q.type === 'temperature' && 'Temp'}
+                                       {q.type === 'rank' && 'Rank'}
+                                    </span>
+                                 </div>
+                                 <div className="flex gap-2 mt-1">
+                                    <button 
+                                       onClick={() => launchQuestion(q)}
+                                       className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-1.5 rounded-lg font-bold text-xs transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
+                                    >
+                                       Launch Live
+                                    </button>
+                                    <button 
+                                       onClick={() => deleteFromBank(q.id)}
+                                       className="px-2.5 bg-slate-700 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors border border-slate-600"
+                                    >
+                                       ✕
+                                    </button>
+                                 </div>
+                              </div>
+                           ))
+                        )}
+                     </div>
+                  </div>
+               </div>
+            )}
+         </div>
       </div>
+      
+      {/* Add invisible CSS block for scrollbar hiding since inline pseudo-elements aren't native React */}
+      <style>{`
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
+      `}</style>
     </div>
   );
 }
@@ -915,14 +1044,14 @@ function StudentView({ user, roomCode, studentName }) {
       
       <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-40 bg-gradient-to-b from-black/90 via-black/60 to-transparent pointer-events-none">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center font-bold text-white shadow-lg border border-emerald-500/50">
+          <div className="w-8 h-8 md:w-10 md:h-10 bg-emerald-600 rounded-xl flex items-center justify-center font-bold text-white shadow-lg border border-emerald-500/50 text-sm md:text-base">
             {studentName.charAt(0).toUpperCase()}
           </div>
-          <span className="text-white font-medium text-lg drop-shadow-md">{studentName}</span>
+          <span className="text-white font-medium text-sm md:text-lg drop-shadow-md">{studentName}</span>
         </div>
-        <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 shadow-lg">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"></div>
-          <span className="text-sm text-emerald-400 font-bold tracking-wider">
+        <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 md:px-4 py-1.5 md:py-2 rounded-full border border-white/10 shadow-lg">
+          <div className="w-2 h-2 md:w-2.5 md:h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"></div>
+          <span className="text-xs md:text-sm text-emerald-400 font-bold tracking-wider">
             ROOM {roomCode}
           </span>
         </div>
@@ -932,9 +1061,9 @@ function StudentView({ user, roomCode, studentName }) {
          
          <div className="flex-1 h-full relative bg-black flex items-center justify-center transition-all duration-500 overflow-hidden">
             {!activeSlide ? (
-               <div className="flex flex-col items-center justify-center scale-110">
-                  <svg className="w-24 h-24 text-slate-700 mb-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                  <p className="text-slate-500 font-medium text-xl tracking-wide">Waiting for teacher's presentation...</p>
+               <div className="flex flex-col items-center justify-center scale-90 md:scale-110">
+                  <svg className="w-16 h-16 md:w-24 md:h-24 text-slate-700 mb-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                  <p className="text-slate-500 font-medium text-lg md:text-xl tracking-wide text-center px-4">Waiting for teacher's presentation...</p>
                </div>
             ) : (
                <div className="w-full h-full bg-black relative">
@@ -943,7 +1072,7 @@ function StudentView({ user, roomCode, studentName }) {
                         {!isPeerConnected && (
                            <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-black">
                               <div className="w-12 h-12 border-4 border-slate-700 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-                              <p className="text-slate-400 font-medium">Connecting to Screen Share...</p>
+                              <p className="text-slate-400 font-medium text-sm md:text-base">Connecting to Screen Share...</p>
                            </div>
                         )}
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain pointer-events-none" />
@@ -971,14 +1100,14 @@ function StudentView({ user, roomCode, studentName }) {
 
          <div 
            className={`bg-slate-800 shadow-[-20px_0_40px_rgba(0,0,0,0.6)] flex flex-col transition-all duration-500 ease-in-out relative z-30 overflow-hidden
-           ${activeQuestion ? 'h-[55%] md:h-full w-full md:w-[420px] border-t md:border-t-0 md:border-l border-orange-500/50' : 'h-0 md:h-full w-full md:w-0 border-none'}`}
+           ${activeQuestion ? 'h-[60%] md:h-full w-full md:w-[350px] lg:w-[420px] border-t md:border-t-0 md:border-l border-orange-500/50' : 'h-0 md:h-full w-full md:w-0 border-none'}`}
          >
-            <div className="w-full md:w-[420px] h-full overflow-y-auto relative p-6 pt-16 md:pt-24 flex flex-col">
+            <div className="w-full h-full overflow-y-auto relative p-4 md:p-6 pt-12 md:pt-24 flex flex-col custom-scrollbar">
                {activeQuestion && (
                   <>
                      <div className="absolute top-0 left-0 w-full h-1 md:h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
                      
-                     <div className="text-center mb-6">
+                     <div className="text-center mb-4 md:mb-6">
                         <div className="inline-block bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest mb-3 border border-orange-500/30 shadow-sm">
                           {activeQuestion.type === 'mcq' && 'Multiple Choice'}
                           {activeQuestion.type === 'short_answer' && 'Short Answer'}
@@ -987,38 +1116,38 @@ function StudentView({ user, roomCode, studentName }) {
                           {activeQuestion.type === 'temperature' && 'Temperature Check'}
                           {activeQuestion.type === 'rank' && 'Rank Order'}
                         </div>
-                        <h2 className="text-xl sm:text-2xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
+                        <h2 className="text-lg md:text-xl lg:text-2xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
                      </div>
                      
                      {!hasAnswered ? (
-                       <div className="w-full flex-1 flex flex-col justify-center">
+                       <div className="w-full flex-1 flex flex-col justify-center pb-4">
                          
                          {activeQuestion.type === 'mcq' && (
-                            <div className="grid grid-cols-1 gap-3">
+                            <div className="grid grid-cols-1 gap-2 md:gap-3">
                               {activeQuestion.options.map((option, idx) => (
                                 <button
                                   key={idx}
                                   onClick={() => submitAnswer(option)}
-                                  className="w-full py-4 px-5 bg-slate-700 hover:bg-orange-600 text-white text-lg font-medium rounded-xl transition-all border border-slate-600 hover:border-orange-500 shadow-lg active:scale-95 text-left flex items-center justify-between group"
+                                  className="w-full py-3 md:py-4 px-4 md:px-5 bg-slate-700 hover:bg-orange-600 text-white text-base md:text-lg font-medium rounded-xl transition-all border border-slate-600 hover:border-orange-500 shadow-lg active:scale-95 text-left flex items-center justify-between group"
                                 >
                                   <span>{option}</span>
-                                  <div className="w-5 h-5 rounded-full border-2 border-slate-500 group-hover:border-white opacity-50 group-hover:opacity-100 flex-shrink-0 ml-3"></div>
+                                  <div className="w-4 h-4 md:w-5 md:h-5 rounded-full border-2 border-slate-500 group-hover:border-white opacity-50 group-hover:opacity-100 flex-shrink-0 ml-3"></div>
                                 </button>
                               ))}
                             </div>
                          )}
 
                          {activeQuestion.type === 'short_answer' && (
-                            <div className="flex flex-col gap-4">
+                            <div className="flex flex-col gap-3 md:gap-4">
                                <textarea 
                                   placeholder="Type your answer here..."
                                   value={shortAnswerText}
                                   onChange={(e) => setShortAnswerText(e.target.value)}
-                                  className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white text-base focus:outline-none focus:border-orange-500 h-28 resize-none shadow-inner"
+                                  className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 md:p-4 text-white text-sm md:text-base focus:outline-none focus:border-orange-500 h-24 md:h-28 resize-none shadow-inner custom-scrollbar"
                                />
                                <button 
                                   onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
-                                  className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
+                                  className={`w-full py-3 md:py-4 rounded-xl font-bold text-base md:text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
                                >
                                   Submit Answer
                                </button>
@@ -1026,19 +1155,19 @@ function StudentView({ user, roomCode, studentName }) {
                          )}
 
                          {activeQuestion.type === 'word_cloud' && (
-                             <div className="flex flex-col gap-4">
-                                <p className="text-slate-400 text-sm text-center">Type <b className="text-white">one</b> short word or phrase!</p>
+                             <div className="flex flex-col gap-3 md:gap-4">
+                                <p className="text-slate-400 text-xs md:text-sm text-center">Type <b className="text-white">one</b> short word or phrase!</p>
                                 <input 
                                    type="text" 
                                    placeholder="e.g. Fantastic"
                                    maxLength={25}
                                    value={shortAnswerText}
                                    onChange={(e) => setShortAnswerText(e.target.value)}
-                                   className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white text-xl text-center font-bold focus:outline-none focus:border-orange-500 shadow-inner uppercase tracking-wider"
+                                   className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 md:p-4 text-white text-lg md:text-xl text-center font-bold focus:outline-none focus:border-orange-500 shadow-inner uppercase tracking-wider"
                                 />
                                 <button 
                                    onClick={() => { if(shortAnswerText.trim()) submitAnswer(shortAnswerText); }}
-                                   className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
+                                   className={`w-full py-3 md:py-4 rounded-xl font-bold text-base md:text-lg transition-all ${shortAnswerText.trim() ? 'bg-orange-600 hover:bg-orange-500 text-white active:scale-95 shadow-lg shadow-orange-500/25' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}
                                 >
                                    Send to Word Cloud
                                 </button>
@@ -1046,20 +1175,20 @@ function StudentView({ user, roomCode, studentName }) {
                          )}
 
                          {activeQuestion.type === 'thumbs' && (
-                            <div className="flex gap-3 justify-center">
-                               <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-8 bg-slate-700 hover:bg-emerald-600 rounded-2xl border border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-lg group">
-                                  <div className="text-5xl mb-2 group-hover:scale-110 transition-transform">👍</div>
-                                  <div className="text-white font-bold text-sm">Agree</div>
+                            <div className="flex gap-2 md:gap-3 justify-center">
+                               <button onClick={() => submitAnswer('👍 Thumbs Up')} className="flex-1 py-6 md:py-8 bg-slate-700 hover:bg-emerald-600 rounded-2xl border border-slate-600 hover:border-emerald-500 transition-all active:scale-95 shadow-lg group">
+                                  <div className="text-4xl md:text-5xl mb-1 md:mb-2 group-hover:scale-110 transition-transform">👍</div>
+                                  <div className="text-white font-bold text-xs md:text-sm">Agree</div>
                                </button>
-                               <button onClick={() => submitAnswer('👎 Thumbs Down')} className="flex-1 py-8 bg-slate-700 hover:bg-red-600 rounded-2xl border border-slate-600 hover:border-red-500 transition-all active:scale-95 shadow-lg group">
-                                  <div className="text-5xl mb-2 group-hover:scale-110 transition-transform">👎</div>
-                                  <div className="text-white font-bold text-sm">Disagree</div>
+                               <button onClick={() => submitAnswer('👎 Thumbs Down')} className="flex-1 py-6 md:py-8 bg-slate-700 hover:bg-red-600 rounded-2xl border border-slate-600 hover:border-red-500 transition-all active:scale-95 shadow-lg group">
+                                  <div className="text-4xl md:text-5xl mb-1 md:mb-2 group-hover:scale-110 transition-transform">👎</div>
+                                  <div className="text-white font-bold text-xs md:text-sm">Disagree</div>
                                </button>
                             </div>
                          )}
 
                          {activeQuestion.type === 'temperature' && (
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-2 gap-2 md:gap-3">
                                {[
                                  { e: '🥵', t: 'Overwhelmed' },
                                  { e: '😕', t: 'Confused' },
@@ -1070,25 +1199,25 @@ function StudentView({ user, roomCode, studentName }) {
                                  <button 
                                     key={idx} 
                                     onClick={() => submitAnswer(`${item.e} ${item.t}`)}
-                                    className={`flex flex-col items-center gap-1 p-3 bg-slate-700 hover:bg-orange-600 border border-slate-600 hover:border-orange-500 rounded-xl transition-all active:scale-95 shadow-md group ${idx === 4 ? 'col-span-2' : ''}`}
+                                    className={`flex flex-col items-center justify-center gap-1 p-2 md:p-3 bg-slate-700 hover:bg-orange-600 border border-slate-600 hover:border-orange-500 rounded-xl transition-all active:scale-95 shadow-md group ${idx === 4 ? 'col-span-2' : ''}`}
                                  >
-                                    <div className="text-3xl group-hover:scale-125 transition-transform">{item.e}</div>
-                                    <div className="text-white text-[11px] font-bold text-center uppercase tracking-wider">{item.t}</div>
+                                    <div className="text-2xl md:text-3xl group-hover:scale-125 transition-transform">{item.e}</div>
+                                    <div className="text-white text-[9px] md:text-[11px] font-bold text-center uppercase tracking-wider">{item.t}</div>
                                  </button>
                                ))}
                             </div>
                          )}
 
                          {activeQuestion.type === 'rank' && (
-                            <div className="flex flex-col gap-4">
-                               <p className="text-slate-400 text-center text-xs">Tap items to rank them</p>
-                               <div className="flex flex-col gap-2 min-h-[80px] p-3 bg-slate-900 border border-dashed border-slate-600 rounded-xl">
+                            <div className="flex flex-col gap-3 md:gap-4">
+                               <p className="text-slate-400 text-center text-[10px] md:text-xs">Tap items to rank them</p>
+                               <div className="flex flex-col gap-2 min-h-[60px] md:min-h-[80px] p-2 md:p-3 bg-slate-900 border border-dashed border-slate-600 rounded-xl">
                                   {rankOrder.length === 0 ? (
-                                     <div className="text-slate-500 text-center italic text-sm my-auto">Ranking order...</div>
+                                     <div className="text-slate-500 text-center italic text-xs md:text-sm my-auto">Ranking order...</div>
                                   ) : (
                                      rankOrder.map((opt, idx) => (
-                                        <button key={idx} onClick={() => handleRankClick(opt)} className="bg-blue-600 text-white font-semibold py-2 px-3 rounded-lg text-left flex gap-3 items-center shadow-md animate-in slide-in-from-bottom-2 text-sm">
-                                           <span className="bg-black/30 w-6 h-6 rounded-md flex items-center justify-center text-xs">{idx + 1}</span>
+                                        <button key={idx} onClick={() => handleRankClick(opt)} className="bg-blue-600 text-white font-semibold py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-left flex gap-2 md:gap-3 items-center shadow-md animate-in slide-in-from-bottom-2 text-xs md:text-sm">
+                                           <span className="bg-black/30 w-5 h-5 md:w-6 md:h-6 rounded-md flex items-center justify-center text-[10px] md:text-xs">{idx + 1}</span>
                                            <span className="flex-1 truncate">{opt}</span>
                                         </button>
                                      ))
@@ -1096,7 +1225,7 @@ function StudentView({ user, roomCode, studentName }) {
                                </div>
                                <div className="flex flex-wrap gap-2 justify-center">
                                   {activeQuestion.options.filter(o => !rankOrder.includes(o)).map((opt, idx) => (
-                                     <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-2 px-3 rounded-lg font-medium shadow-sm active:scale-95 transition-all text-sm">
+                                     <button key={idx} onClick={() => handleRankClick(opt)} className="bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white py-1.5 md:py-2 px-2 md:px-3 rounded-lg font-medium shadow-sm active:scale-95 transition-all text-xs md:text-sm">
                                         {opt}
                                      </button>
                                   ))}
@@ -1104,7 +1233,7 @@ function StudentView({ user, roomCode, studentName }) {
                                {rankOrder.length === activeQuestion.options.length && (
                                   <button 
                                      onClick={() => submitAnswer(rankOrder)}
-                                     className="w-full py-3 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-lg transition-all shadow-lg active:scale-95 animate-in zoom-in"
+                                     className="w-full py-3 md:py-3 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-base md:text-lg transition-all shadow-lg active:scale-95 animate-in zoom-in"
                                   >
                                      Submit Order
                                   </button>
@@ -1113,12 +1242,12 @@ function StudentView({ user, roomCode, studentName }) {
                          )}
                        </div>
                      ) : (
-                       <div className="text-center py-10 my-auto">
-                         <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.2)] animate-in zoom-in">
-                            <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                       <div className="text-center py-6 md:py-10 my-auto">
+                         <div className="w-12 h-12 md:w-16 md:h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-3 md:mb-4 border-2 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.2)] animate-in zoom-in">
+                            <svg className="w-6 h-6 md:w-8 md:h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                          </div>
-                         <h3 className="text-xl font-bold text-emerald-400 mb-2">Submitted!</h3>
-                         <p className="text-slate-400 text-sm">Look up at the board...</p>
+                         <h3 className="text-lg md:text-xl font-bold text-emerald-400 mb-1 md:mb-2">Submitted!</h3>
+                         <p className="text-slate-400 text-xs md:text-sm">Look up at the board...</p>
                        </div>
                      )}
                   </>
@@ -1246,10 +1375,10 @@ function ProjectorView({ roomCode }) {
                <div className="inline-block bg-orange-500/20 text-orange-400 px-6 py-2 rounded-full text-lg font-bold uppercase tracking-widest mb-6 border border-orange-500/30">
                  Live Class Activity
                </div>
-               <h2 className="text-6xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
+               <h2 className="text-5xl lg:text-6xl font-bold text-white leading-tight">{activeQuestion.text}</h2>
             </div>
             
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
                 {activeQuestion.type === 'word_cloud' && (
                     <div className="flex flex-wrap justify-center items-center gap-6 h-full p-8 bg-slate-900 rounded-[2rem] border-2 border-dashed border-slate-600">
                         {answers.length === 0 ? (
@@ -1262,7 +1391,7 @@ function ProjectorView({ roomCode }) {
                                      fontSize: `${Math.min(3 + (count - 1) * 1.5, 9)}rem`,
                                      opacity: Math.min(0.6 + count * 0.2, 1)
                                   }} 
-                                  className={`font-black tracking-tight transition-all duration-500 drop-shadow-xl ${wordCloudColors[i % wordCloudColors.length]}`}
+                                  className={`font-black tracking-tight transition-all duration-500 drop-shadow-xl leading-none ${wordCloudColors[i % wordCloudColors.length]}`}
                                >
                                   {word}
                                </span>
@@ -1274,7 +1403,7 @@ function ProjectorView({ roomCode }) {
                 {activeQuestion.type === 'mcq' && (
                   <div className="grid grid-cols-2 gap-8">
                     {activeQuestion.options.map((option, idx) => (
-                      <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-4xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
+                      <div key={idx} className="w-full py-8 px-8 bg-slate-700 text-white text-3xl lg:text-4xl font-medium rounded-3xl border-2 border-slate-600 shadow-xl text-center">
                         {option}
                       </div>
                     ))}
@@ -1283,7 +1412,7 @@ function ProjectorView({ roomCode }) {
                 
                 {activeQuestion.type === 'short_answer' && (
                    <div className="text-center py-12 bg-slate-900 border-2 border-dashed border-slate-600 rounded-3xl">
-                      <p className="text-4xl text-slate-400 font-medium italic">✍️ Type your answers on your device...</p>
+                      <p className="text-3xl lg:text-4xl text-slate-400 font-medium italic">✍️ Type your answers on your device...</p>
                    </div>
                 )}
 
@@ -1301,7 +1430,7 @@ function ProjectorView({ roomCode }) {
                 {activeQuestion.type === 'temperature' && (
                    <div className="flex justify-center gap-8">
                       {['🥵', '😕', '😐', '🙂', '🤩'].map((emoji, idx) => (
-                         <div key={idx} className="bg-slate-700 p-8 rounded-full border-2 border-slate-600 flex items-center justify-center w-32 h-32 text-6xl shadow-xl">
+                         <div key={idx} className="bg-slate-700 p-6 lg:p-8 rounded-full border-2 border-slate-600 flex items-center justify-center w-24 h-24 lg:w-32 lg:h-32 text-5xl lg:text-6xl shadow-xl">
                             {emoji}
                          </div>
                       ))}
@@ -1311,7 +1440,7 @@ function ProjectorView({ roomCode }) {
                 {activeQuestion.type === 'rank' && (
                    <div className="flex flex-wrap gap-4 justify-center">
                       {activeQuestion.options.map((opt, idx) => (
-                         <div key={idx} className="bg-slate-700 text-white text-3xl font-bold py-6 px-10 rounded-2xl border-2 border-slate-500 shadow-lg">
+                         <div key={idx} className="bg-slate-700 text-white text-2xl lg:text-3xl font-bold py-6 px-10 rounded-2xl border-2 border-slate-500 shadow-lg">
                             {opt}
                          </div>
                       ))}
