@@ -589,7 +589,7 @@ function TeacherView({ user, roomCode }) {
     } catch (err) {}
   };
 
-  // Generate an array of page numbers to render in the scanner bar
+  // Generate an array of page numbers to render in the scanner bar (Limits max items to prevent lag)
   const generateSlidePickerList = () => {
       if (!activeSlide || activeSlide.type !== 'link') return [];
       const current = activeSlide.page || 1;
@@ -601,7 +601,7 @@ function TeacherView({ user, roomCode }) {
     <div className="h-screen bg-slate-900 text-white flex flex-col overflow-hidden font-sans">
       
       {/* Top Navbar */}
-      <div className="bg-slate-800 p-4 shadow-xl border-b border-slate-700 flex flex-wrap justify-between items-center gap-4 flex-shrink-0 relative">
+      <div className="bg-slate-800 p-4 shadow-xl border-b border-slate-700 flex flex-wrap justify-between items-center gap-4 flex-shrink-0 relative z-20">
          <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
          <div>
             <h2 className="text-xl md:text-2xl font-bold text-slate-100 flex items-center gap-2">
@@ -636,11 +636,11 @@ function TeacherView({ user, roomCode }) {
          </div>
       )}
 
-      {/* Main Responsive Grid Container */}
+      {/* Main Responsive 3-Column Grid Container */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
          
-         {/* Left Column: Presentation & Controls (Expands to fill) */}
-         <div className="flex-[2] flex flex-col border-r border-slate-700 bg-black overflow-hidden relative">
+         {/* COLUMN 1: Presentation & Controls */}
+         <div className="flex-1 flex flex-col border-b lg:border-b-0 lg:border-r border-slate-700 bg-black min-h-[50vh] lg:min-h-0 relative overflow-hidden">
             
             {/* Input Bar (Hidden if presentation active to save space) */}
             {!activeSlide && (
@@ -715,7 +715,7 @@ function TeacherView({ user, roomCode }) {
                )}
             </div>
 
-            {/* Slide Navigation & Picker (Only shows for Links) */}
+            {/* Slide Navigation & Visual Thumbnail Picker */}
             {activeSlide && activeSlide.type === 'link' && activeSlide.url.includes('docs.google.com/presentation') && (
                 <div className="bg-slate-800 border-t border-slate-700 flex-shrink-0 shadow-[0_-10px_20px_rgba(0,0,0,0.3)] z-20">
                     <div className="flex items-center justify-between p-3 border-b border-slate-700/50 bg-slate-900/50">
@@ -723,66 +723,77 @@ function TeacherView({ user, roomCode }) {
                         <span className="text-emerald-400 font-bold tracking-widest uppercase text-sm">Slide {activeSlide.page || 1}</span>
                         <button onClick={() => changePage(1)} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-bold transition-all shadow-md active:scale-95 text-sm">Next &rarr;</button>
                     </div>
-                    {/* Slide Scanner Horizontal Scroll */}
-                    <div className="flex overflow-x-auto gap-2 p-3 hide-scrollbar items-center">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-2 pr-4 flex-shrink-0">Jump To:</span>
-                        {generateSlidePickerList().map((num) => (
-                           <button
-                              key={num}
-                              onClick={() => jumpToPage(num)}
-                              className={`flex-shrink-0 w-10 h-10 rounded-lg font-bold text-sm transition-all flex items-center justify-center border
-                                 ${(activeSlide.page || 1) === num 
-                                     ? 'bg-emerald-600 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.4)] scale-110 mx-2' 
-                                     : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600 hover:text-white'}`}
-                           >
-                              {num}
-                           </button>
-                        ))}
+                    {/* Visual Slide Scanner Horizontal Scroll */}
+                    <div className="flex overflow-x-auto gap-3 p-3 hide-scrollbar items-center bg-slate-900/80">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-2 pr-2 flex-shrink-0">Jump To:</span>
+                        {generateSlidePickerList().map((num) => {
+                           const isActive = (activeSlide.page || 1) === num;
+                           return (
+                               <button
+                                  key={num}
+                                  onClick={() => jumpToPage(num)}
+                                  className={`relative flex-shrink-0 w-28 h-16 rounded-lg overflow-hidden transition-all shadow-md group border-2 ${isActive ? 'border-emerald-500 ring-2 ring-emerald-500/50 scale-110 mx-2 z-10' : 'border-slate-600 hover:border-slate-400 opacity-70 hover:opacity-100'}`}
+                               >
+                                  {/* The Thumbnail via lazy-loaded Iframe */}
+                                  <div className="absolute top-0 left-0 w-[400%] h-[400%] origin-top-left scale-[0.25] pointer-events-none bg-white">
+                                      <iframe 
+                                          src={parseMediaUrl(activeSlide.url, num).src} 
+                                          className="w-full h-full border-0" 
+                                          loading="lazy"
+                                      />
+                                  </div>
+                                  {/* Number overlay */}
+                                  <div className={`absolute bottom-0 left-0 w-full bg-black/70 backdrop-blur-sm text-[10px] font-bold text-center py-0.5 ${isActive ? 'text-emerald-400' : 'text-white'}`}>
+                                      Slide {num}
+                                  </div>
+                               </button>
+                           )
+                        })}
                     </div>
                 </div>
             )}
          </div>
 
-         {/* Right Column: Next Slide Preview, Notes, & Question Bank */}
-         <div className="flex-[1.2] lg:max-w-md xl:max-w-lg flex flex-col bg-slate-800 min-h-0 overflow-y-auto border-t lg:border-t-0">
+         {/* COLUMN 2: Presenter Tools (Up Next & Notes) - Only visible during slides */}
+         {activeSlide && activeSlide.type === 'link' && activeSlide.url.includes('docs.google.com/presentation') && (
+             <div className="w-full lg:w-72 xl:w-80 flex-shrink-0 flex flex-col border-b lg:border-b-0 lg:border-r border-slate-700 bg-slate-800 min-h-[40vh] lg:min-h-0">
+                 
+                 {/* Next Slide Preview */}
+                 <div className="p-4 border-b border-slate-700 flex flex-col gap-2 flex-shrink-0 bg-slate-900/30">
+                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                         <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                         Up Next (Slide {(activeSlide.page || 1) + 1})
+                     </h4>
+                     <div className="w-full aspect-video bg-black rounded-lg border border-slate-600 overflow-hidden relative group shadow-inner">
+                         {/* CSS Scaling Trick to create a thumbnail iframe */}
+                         <div className="absolute top-0 left-0 w-[200%] h-[200%] origin-top-left scale-50 pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
+                             <iframe 
+                                 src={parseMediaUrl(activeSlide.url, (activeSlide.page || 1) + 1).src} 
+                                 className="w-full h-full border-0"
+                             />
+                         </div>
+                     </div>
+                 </div>
+
+                 {/* Presenter Notes */}
+                 <div className="p-4 flex flex-col gap-2 flex-1 min-h-[200px] bg-slate-800">
+                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                         <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                         Notes (Slide {activeSlide.page || 1})
+                     </h4>
+                     <textarea 
+                         value={currentNote}
+                         onChange={(e) => saveNoteToFirebase(e.target.value)}
+                         placeholder="Type private notes for this slide here. They auto-save and appear when you reach this slide..."
+                         className="w-full flex-1 bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm text-yellow-100 focus:outline-none focus:border-yellow-500 resize-none shadow-inner custom-scrollbar"
+                     />
+                 </div>
+             </div>
+         )}
+
+         {/* COLUMN 3: Question Builder, Activity, & Bank */}
+         <div className="w-full lg:w-80 xl:w-[400px] flex-shrink-0 flex flex-col bg-slate-800 min-h-[60vh] lg:min-h-0">
             
-            {/* Presenter Mode Panels (Only active if presentation is running) */}
-            {activeSlide && activeSlide.type === 'link' && activeSlide.url.includes('docs.google.com/presentation') && (
-                <div className="flex flex-col border-b border-slate-700 bg-slate-900/30">
-                    
-                    {/* Next Slide Preview */}
-                    <div className="p-4 border-b border-slate-700 flex flex-col gap-2">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                            <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                            Up Next (Slide {(activeSlide.page || 1) + 1})
-                        </h4>
-                        <div className="w-full aspect-video bg-black rounded-lg border border-slate-600 overflow-hidden relative group shadow-inner">
-                            {/* CSS Scaling Trick to create a thumbnail iframe */}
-                            <div className="absolute top-0 left-0 w-[200%] h-[200%] origin-top-left scale-50 pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
-                                <iframe 
-                                    src={parseMediaUrl(activeSlide.url, (activeSlide.page || 1) + 1).src} 
-                                    className="w-full h-full border-0"
-                                />
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Presenter Notes */}
-                    <div className="p-4 flex flex-col gap-2">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                            <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                            Presenter Notes (Slide {activeSlide.page || 1})
-                        </h4>
-                        <textarea 
-                            value={currentNote}
-                            onChange={(e) => saveNoteToFirebase(e.target.value)}
-                            placeholder="Type private notes for this slide here. They auto-save..."
-                            className="w-full h-24 bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm text-yellow-100 focus:outline-none focus:border-yellow-500 resize-none shadow-inner custom-scrollbar"
-                        />
-                    </div>
-                </div>
-            )}
-
             {/* Live Question Activity Panel */}
             {activeQuestion && (
                <div className="p-4 bg-slate-800 border-b-2 border-orange-500 relative overflow-hidden flex flex-col">
@@ -795,7 +806,7 @@ function TeacherView({ user, roomCode }) {
                   </div>
                   <p className="font-semibold text-white text-base mb-3 leading-tight">{activeQuestion.text}</p>
                   
-                  <div className="bg-slate-900 rounded-xl p-3 border border-slate-700 flex-1 max-h-64 overflow-y-auto custom-scrollbar">
+                  <div className="bg-slate-900 rounded-xl p-3 border border-slate-700 flex-1 max-h-[40vh] overflow-y-auto custom-scrollbar">
                      {answers.length === 0 ? (
                         <p className="text-slate-500 text-center italic text-xs mt-4">Waiting for responses...</p>
                      ) : activeQuestion.type === 'word_cloud' ? (
