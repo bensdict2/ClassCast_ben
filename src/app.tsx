@@ -346,6 +346,9 @@ function TeacherView({ user, roomCode }) {
   const [currentNote, setCurrentNote] = useState(''); 
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   
+  // ADD: View Mode state to toggle between the Dashboard and the Live Console
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('classcast_viewMode') || 'dashboard');
+  
   const [lessonBank, setLessonBank] = useState([]);
   const [lessonTitle, setLessonTitle] = useState('');
   const [isSavingLesson, setIsSavingLesson] = useState(false);
@@ -649,6 +652,97 @@ function TeacherView({ user, roomCode }) {
       return Array.from({length: maxToRender}, (_, i) => i + 1);
   };
 
+  // ADD: The Teacher Landing Dashboard
+  if (viewMode === 'dashboard') {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col font-sans p-6 md:p-10">
+        <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
+           
+           {/* Dashboard Header */}
+           <div className="flex justify-between items-center mb-10 md:mb-16">
+              <div>
+                 <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-blue-500 flex items-center gap-3">
+                    <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    Teacher Dashboard
+                 </h1>
+                 <p className="text-slate-400 mt-2">Welcome back! Manage your sessions and lessons here.</p>
+              </div>
+              <button onClick={handleLogout} className="px-5 py-2.5 bg-slate-800 hover:bg-red-600 rounded-xl font-bold text-sm transition-all shadow-lg border border-slate-700 hover:border-red-500 active:scale-95">
+                 Log Out
+              </button>
+           </div>
+
+           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1">
+              
+              {/* Start Blank Session Card */}
+              <div 
+                 onClick={() => { setViewMode('console'); localStorage.setItem('classcast_viewMode', 'console'); }}
+                 className="bg-slate-800 p-8 md:p-12 rounded-3xl border border-slate-700 flex flex-col items-center justify-center text-center group cursor-pointer hover:border-emerald-500 hover:shadow-[0_0_40px_rgba(16,185,129,0.15)] transition-all duration-300"
+              >
+                 <div className="w-24 h-24 bg-slate-900 rounded-full flex items-center justify-center mb-8 border-4 border-slate-700 group-hover:border-emerald-500 group-hover:scale-110 transition-all duration-300">
+                    <svg className="w-10 h-10 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                 </div>
+                 <h2 className="text-2xl font-bold text-white mb-3">Start a New Live Session</h2>
+                 <p className="text-slate-400 text-sm max-w-sm">Launch an empty console. You can paste links, share your screen, or push ad-hoc questions to your students directly.</p>
+                 <div className="mt-8 px-6 py-2 bg-emerald-600/20 text-emerald-400 rounded-full text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">Launch Workspace &rarr;</div>
+              </div>
+
+              {/* Saved Lessons Panel */}
+              <div className="bg-slate-800 rounded-3xl border border-slate-700 flex flex-col overflow-hidden max-h-[600px]">
+                 <div className="p-6 md:p-8 border-b border-slate-700 bg-slate-900/30 flex justify-between items-center">
+                    <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                       <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                       Your Saved Lessons
+                    </h2>
+                    <span className="bg-purple-500/20 text-purple-300 px-3 py-1 rounded-full text-xs font-bold">{lessonBank.length} Items</span>
+                 </div>
+                 
+                 <div className="flex-1 p-6 md:p-8 overflow-y-auto custom-scrollbar">
+                    {lessonBank.length === 0 ? (
+                       <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center">
+                          <svg className="w-16 h-16 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
+                          <p>You haven't saved any lessons yet.</p>
+                          <p className="text-sm mt-1">Start a session and click "Save" next to the Sync button.</p>
+                       </div>
+                    ) : (
+                       <div className="grid grid-cols-1 gap-4">
+                          {lessonBank.map((l) => (
+                             <div key={l.id} className="bg-slate-900 rounded-2xl border border-slate-700 p-4 hover:border-purple-500 transition-colors group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="overflow-hidden">
+                                   <h3 className="text-white font-bold text-lg truncate mb-1">{l.title}</h3>
+                                   <p className="text-slate-500 text-xs font-mono truncate">{l.url}</p>
+                                </div>
+                                <div className="flex gap-2 flex-shrink-0">
+                                   <button 
+                                      onClick={() => deleteLessonFromBank(l.id)} 
+                                      className="p-3 bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-red-400 rounded-xl transition-colors border border-slate-700 hover:border-red-500/50"
+                                      title="Delete Lesson"
+                                   >
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                   </button>
+                                   <button 
+                                      onClick={() => {
+                                         pushSlide(l.url);
+                                         setViewMode('console');
+                                         localStorage.setItem('classcast_viewMode', 'console');
+                                      }} 
+                                      className="px-5 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-sm transition-all shadow-md active:scale-95 whitespace-nowrap"
+                                   >
+                                      Start Lesson
+                                   </button>
+                                </div>
+                             </div>
+                          ))}
+                       </div>
+                    )}
+                 </div>
+              </div>
+           </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen bg-slate-900 text-white flex flex-col overflow-hidden font-sans">
       
@@ -674,10 +768,17 @@ function TeacherView({ user, roomCode }) {
                <span className="sm:hidden">Projector</span>
             </button>
             <button 
-               onClick={handleLogout} 
-               className="px-4 py-2 bg-slate-700 hover:bg-red-600 rounded-xl font-bold text-sm transition-all shadow-lg border border-slate-600 hover:border-red-500 active:scale-95"
+               onClick={() => {
+                   clearSlide();
+                   clearQuestion();
+                   setViewMode('dashboard');
+                   localStorage.setItem('classcast_viewMode', 'dashboard');
+               }} 
+               className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold text-sm transition-all shadow-lg border border-slate-600 hover:border-slate-500 active:scale-95 flex items-center gap-2"
             >
-               Log Out
+               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+               <span className="hidden sm:inline">End Session</span>
+               <span className="sm:hidden">End</span>
             </button>
          </div>
       </div>
