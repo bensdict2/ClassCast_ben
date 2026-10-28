@@ -17,8 +17,7 @@ import {
   onSnapshot, 
   collection,
   addDoc,
-  deleteDoc,
-  getDoc
+  deleteDoc
 } from 'firebase/firestore';
 
 const appId = 'my-classroom-app'; 
@@ -81,9 +80,9 @@ const parseMediaUrl = (url, page = 1) => {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null); 
-  const [roomCode, setRoomCode] = useState('');
-  const [studentName, setStudentName] = useState('');
+  const [role, setRole] = useState(() => localStorage.getItem('classcast_role') || null); 
+  const [roomCode, setRoomCode] = useState(() => localStorage.getItem('classcast_roomCode') || '');
+  const [studentName, setStudentName] = useState(() => localStorage.getItem('classcast_studentName') || '');
   const [errorMsg, setErrorMsg] = useState('');
   const [isPeerLoaded, setIsPeerLoaded] = useState(false);
 
@@ -135,8 +134,11 @@ export default function App() {
           } else {
               await signInWithEmailAndPassword(auth, email, password);
           }
-          setRoomCode(generateRoomCode());
+          const newCode = generateRoomCode();
+          setRoomCode(newCode);
           setRole('teacher');
+          localStorage.setItem('classcast_role', 'teacher');
+          localStorage.setItem('classcast_roomCode', newCode);
       } catch (error) {
           if (error.code === 'auth/email-already-in-use') setErrorMsg('This email is already registered. Please log in.');
           else if (error.code === 'auth/wrong-password') setErrorMsg('Incorrect password.');
@@ -154,8 +156,11 @@ export default function App() {
       const provider = new GoogleAuthProvider();
       try {
           await signInWithPopup(auth, provider);
-          setRoomCode(generateRoomCode());
+          const newCode = generateRoomCode();
+          setRoomCode(newCode);
           setRole('teacher');
+          localStorage.setItem('classcast_role', 'teacher');
+          localStorage.setItem('classcast_roomCode', newCode);
       } catch (error) {
           setErrorMsg(error.message);
       } finally {
@@ -214,8 +219,14 @@ export default function App() {
                   />
                   <button 
                     onClick={() => {
-                      if (roomCode.length === 5 && studentName.trim()) setRole('student');
-                      else setErrorMsg('Please enter your name and a 5-digit code.');
+                      if (roomCode.length === 5 && studentName.trim()) {
+                          setRole('student');
+                          localStorage.setItem('classcast_role', 'student');
+                          localStorage.setItem('classcast_roomCode', roomCode.toUpperCase().trim());
+                          localStorage.setItem('classcast_studentName', studentName);
+                      } else {
+                          setErrorMsg('Please enter your name and a 5-digit code.');
+                      }
                     }}
                     className="w-1/3 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-emerald-500/25 active:scale-95"
                   >
@@ -335,6 +346,10 @@ function TeacherView({ user, roomCode }) {
   const [currentNote, setCurrentNote] = useState(''); 
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   
+  const [lessonBank, setLessonBank] = useState([]);
+  const [lessonTitle, setLessonTitle] = useState('');
+  const [isSavingLesson, setIsSavingLesson] = useState(false);
+  
   const videoRef = useRef(null);
   const localStreamRef = useRef(null);
   const peerRef = useRef(null);
@@ -354,6 +369,8 @@ function TeacherView({ user, roomCode }) {
 
   const handleLogout = async () => {
       await signOut(auth);
+      localStorage.removeItem('classcast_role');
+      localStorage.removeItem('classcast_roomCode');
       window.location.reload(); 
   };
 
@@ -368,6 +385,15 @@ function TeacherView({ user, roomCode }) {
        snapshot.forEach(doc => qs.push({ id: doc.id, ...doc.data() }));
        qs.sort((a, b) => a.timestamp - b.timestamp);
        setQuestionBank(qs);
+    });
+
+    // Sync Lesson Bank
+    const lessonRef = collection(db, 'artifacts', appId, 'users', user.uid, 'lessonBank');
+    const unsubscribeLesson = onSnapshot(lessonRef, (snapshot) => {
+       const ls = [];
+       snapshot.forEach(doc => ls.push({ id: doc.id, ...doc.data() }));
+       ls.sort((a, b) => b.timestamp - a.timestamp); // Sort newest lessons to the top
+       setLessonBank(ls);
     });
 
     // Sync Session Data (Including notes)
@@ -390,6 +416,7 @@ function TeacherView({ user, roomCode }) {
     
     return () => {
         unsubscribeBank();
+        unsubscribeLesson();
         unsubscribeSession();
         unsubscribeAnswers();
     };
@@ -432,13 +459,14 @@ function TeacherView({ user, roomCode }) {
       } catch(err) { console.error("Failed to save note", err); }
   };
 
-  const pushSlide = async () => {
-    if (!slideUrl) return;
+  const pushSlide = async (overrideUrl = null) => {
+    const urlToPush = typeof overrideUrl === 'string' ? overrideUrl : slideUrl;
+    if (!urlToPush) return;
     if (isBroadcasting) stopBroadcast(); 
     
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', roomCode);
-      const slideData = { type: 'link', url: slideUrl, page: 1, timestamp: Date.now() };
+      const slideData = { type: 'link', url: urlToPush, page: 1, timestamp: Date.now() };
       await setDoc(sessionRef, { activeSlide: slideData }, { merge: true });
       setActiveSlide(slideData);
       setSlideUrl(''); 
@@ -446,6 +474,30 @@ function TeacherView({ user, roomCode }) {
     } catch (err) {
       setErrorMsg("Failed to push slide.");
     }
+  };
+
+  const saveLessonToBank = async () => {
+      if (!slideUrl.trim() || !lessonTitle.trim()) {
+          setErrorMsg("Please enter a link and a title to save a lesson."); return;
+      }
+      try {
+          const lessonRef = collection(db, 'artifacts', appId, 'users', user.uid, 'lessonBank');
+          await addDoc(lessonRef, {
+              title: lessonTitle,
+              url: slideUrl,
+              timestamp: Date.now()
+          });
+          setLessonTitle('');
+          setIsSavingLesson(false);
+          setErrorMsg('');
+      } catch (err) { setErrorMsg("Failed to save lesson."); }
+  };
+
+  const deleteLessonFromBank = async (lId) => {
+      try {
+          const lRef = doc(db, 'artifacts', appId, 'users', user.uid, 'lessonBank', lId);
+          await deleteDoc(lRef);
+      } catch (err) { console.error("Failed to delete lesson", err); }
   };
 
   const changePage = async (delta) => {
@@ -644,7 +696,7 @@ function TeacherView({ user, roomCode }) {
             
             {/* Input Bar (Hidden if presentation active to save space) */}
             {!activeSlide && (
-               <div className="p-4 bg-slate-800 border-b border-slate-700 flex-shrink-0">
+               <div className="p-4 bg-slate-800 border-b border-slate-700 flex-shrink-0 flex flex-col gap-3">
                   <div className="flex flex-col sm:flex-row gap-3">
                      <input 
                         type="text" 
@@ -659,6 +711,13 @@ function TeacherView({ user, roomCode }) {
                             className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap flex-1 sm:flex-none"
                          >
                             Sync Link
+                         </button>
+                         <button 
+                            onClick={() => setIsSavingLesson(!isSavingLesson)}
+                            className={`px-4 py-3 rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap flex-1 sm:flex-none flex items-center gap-1 ${isSavingLesson ? 'bg-slate-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
+                         >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"></path></svg>
+                            Save
                          </button>
                          {!isBroadcasting ? (
                             <button 
@@ -678,6 +737,25 @@ function TeacherView({ user, roomCode }) {
                          )}
                      </div>
                   </div>
+                  
+                  {/* Save Lesson Inline Form */}
+                  {isSavingLesson && (
+                     <div className="flex gap-2 animate-in fade-in slide-in-from-top-2 pt-2 border-t border-slate-700/50">
+                        <input 
+                           type="text" 
+                           placeholder="Enter Lesson Title (e.g., Intro to Biology)..." 
+                           value={lessonTitle}
+                           onChange={(e) => setLessonTitle(e.target.value)}
+                           className="flex-1 bg-slate-900 border border-slate-600 rounded-xl p-3 text-white focus:outline-none focus:border-yellow-500 text-sm"
+                        />
+                        <button 
+                           onClick={saveLessonToBank}
+                           className="px-6 py-3 bg-yellow-600 hover:bg-yellow-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95 whitespace-nowrap"
+                        >
+                           Save to Account
+                        </button>
+                     </div>
+                  )}
                </div>
             )}
 
@@ -899,46 +977,89 @@ function TeacherView({ user, roomCode }) {
                      </div>
                   </div>
 
-                  <div className="flex-1 p-4 overflow-y-auto bg-slate-900/30 custom-scrollbar">
-                     <div className="flex justify-between items-center mb-3">
-                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saved ({questionBank.length})</h4>
-                         <span className="text-[10px] bg-emerald-900/50 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-800">Auto-synced</span>
-                     </div>
+                  <div className="flex-1 p-4 overflow-y-auto bg-slate-900/30 custom-scrollbar flex flex-col gap-8">
                      
-                     <div className="space-y-3">
-                        {questionBank.length === 0 ? (
-                           <p className="text-slate-500 text-xs italic text-center mt-6">Questions saved here permanently sync to your account.</p>
-                        ) : (
-                           questionBank.map((q) => (
-                              <div key={q.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
-                                 <div className="flex justify-between items-start gap-2">
-                                    <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
-                                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 whitespace-nowrap uppercase font-bold tracking-wider">
-                                       {q.type === 'mcq' && 'MCQ'}
-                                       {q.type === 'short_answer' && 'Short'}
-                                       {q.type === 'word_cloud' && 'Cloud'}
-                                       {q.type === 'thumbs' && 'Poll'}
-                                       {q.type === 'temperature' && 'Temp'}
-                                       {q.type === 'rank' && 'Rank'}
-                                    </span>
-                                 </div>
-                                 <div className="flex gap-2 mt-1">
-                                    <button 
-                                       onClick={() => launchQuestion(q)}
-                                       className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-1.5 rounded-lg font-bold text-xs transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
-                                    >
-                                       Launch Live
-                                    </button>
-                                    <button 
-                                       onClick={() => deleteFromBank(q.id)}
-                                       className="px-2.5 bg-slate-700 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors border border-slate-600"
-                                    >
-                                       ✕
-                                    </button>
-                                 </div>
-                              </div>
-                           ))
-                        )}
+                     {/* Lesson Bank Section */}
+                     <div>
+                         <div className="flex justify-between items-center mb-3">
+                             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                Saved Lessons ({lessonBank.length})
+                             </h4>
+                             <span className="text-[10px] bg-emerald-900/50 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-800">Auto-synced</span>
+                         </div>
+                         
+                         <div className="space-y-3">
+                            {lessonBank.length === 0 ? (
+                               <p className="text-slate-500 text-xs italic text-center mt-4">Save presentations here for instant access.</p>
+                            ) : (
+                               lessonBank.map((l) => (
+                                  <div key={l.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
+                                     <span className="font-medium text-white text-sm leading-snug break-words">{l.title}</span>
+                                     <div className="flex gap-2 mt-1">
+                                        <button 
+                                           onClick={() => pushSlide(l.url)}
+                                           className="flex-1 bg-purple-600 hover:bg-purple-500 text-white py-1.5 rounded-lg font-bold text-xs transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
+                                        >
+                                           Launch Lesson
+                                        </button>
+                                        <button 
+                                           onClick={() => deleteLessonFromBank(l.id)}
+                                           className="px-2.5 bg-slate-700 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors border border-slate-600"
+                                        >
+                                           ✕
+                                        </button>
+                                     </div>
+                                  </div>
+                               ))
+                            )}
+                         </div>
+                     </div>
+
+                     {/* Question Bank Section */}
+                     <div>
+                         <div className="flex justify-between items-center mb-3">
+                             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"></path></svg>
+                                Saved Questions ({questionBank.length})
+                             </h4>
+                         </div>
+                         
+                         <div className="space-y-3">
+                            {questionBank.length === 0 ? (
+                               <p className="text-slate-500 text-xs italic text-center mt-4">Questions saved here permanently sync to your account.</p>
+                            ) : (
+                               questionBank.map((q) => (
+                                  <div key={q.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
+                                     <div className="flex justify-between items-start gap-2">
+                                        <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
+                                        <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 whitespace-nowrap uppercase font-bold tracking-wider">
+                                           {q.type === 'mcq' && 'MCQ'}
+                                           {q.type === 'short_answer' && 'Short'}
+                                           {q.type === 'word_cloud' && 'Cloud'}
+                                           {q.type === 'thumbs' && 'Poll'}
+                                           {q.type === 'temperature' && 'Temp'}
+                                           {q.type === 'rank' && 'Rank'}
+                                        </span>
+                                     </div>
+                                     <div className="flex gap-2 mt-1">
+                                        <button 
+                                           onClick={() => launchQuestion(q)}
+                                           className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-1.5 rounded-lg font-bold text-xs transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
+                                        >
+                                           Launch Live
+                                        </button>
+                                        <button 
+                                           onClick={() => deleteFromBank(q.id)}
+                                           className="px-2.5 bg-slate-700 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors border border-slate-600"
+                                        >
+                                           ✕
+                                        </button>
+                                     </div>
+                                  </div>
+                               ))
+                            )}
+                         </div>
                      </div>
                   </div>
                </div>
