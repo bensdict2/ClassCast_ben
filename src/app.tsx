@@ -365,6 +365,7 @@ function TeacherView({ user, roomCode }) {
   const [qType, setQType] = useState('mcq');
   const [qText, setQText] = useState('');
   const [qOptions, setQOptions] = useState(['', '']);
+  const [qLessonId, setQLessonId] = useState('general');
 
   const openProjector = () => {
      window.open(`/?projector=true&code=${roomCode}`, 'ClassCastProjector', 'width=1280,height=720');
@@ -610,6 +611,7 @@ function TeacherView({ user, roomCode }) {
           type: qType,
           text: qText,
           options: (qType === 'mcq' || qType === 'rank') ? qOptions.filter(o => o.trim()) : [],
+          lessonId: qLessonId,
           timestamp: Date.now()
       };
       
@@ -708,9 +710,22 @@ function TeacherView({ user, roomCode }) {
                        <div className="grid grid-cols-1 gap-4">
                           {lessonBank.map((l) => (
                              <div key={l.id} className="bg-slate-900 rounded-2xl border border-slate-700 p-4 hover:border-purple-500 transition-colors group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                <div className="overflow-hidden">
-                                   <h3 className="text-white font-bold text-lg truncate mb-1">{l.title}</h3>
-                                   <p className="text-slate-500 text-xs font-mono truncate">{l.url}</p>
+                                <div className="flex items-center gap-4 overflow-hidden flex-1">
+                                   <div className="w-24 h-16 bg-black rounded-lg overflow-hidden relative flex-shrink-0 border border-slate-600 shadow-inner">
+                                      {parseMediaUrl(l.url, 1)?.type === 'iframe' ? (
+                                         <div className="absolute top-0 left-0 w-[400%] h-[400%] origin-top-left scale-[0.25] pointer-events-none bg-white">
+                                             <iframe src={parseMediaUrl(l.url, 1).src} className="w-full h-full border-0" loading="lazy" />
+                                         </div>
+                                      ) : parseMediaUrl(l.url, 1)?.type === 'image' ? (
+                                         <img src={parseMediaUrl(l.url, 1).src} className="w-full h-full object-cover" />
+                                      ) : (
+                                         <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500">No Preview</div>
+                                      )}
+                                   </div>
+                                   <div className="overflow-hidden">
+                                      <h3 className="text-white font-bold text-lg truncate mb-1">{l.title}</h3>
+                                      <p className="text-slate-500 text-xs font-mono truncate">{l.url}</p>
+                                   </div>
                                 </div>
                                 <div className="flex gap-2 flex-shrink-0">
                                    <button 
@@ -1048,6 +1063,17 @@ function TeacherView({ user, roomCode }) {
                           className="w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-blue-500 h-16 resize-none shadow-inner custom-scrollbar"
                         />
 
+                        <select 
+                           value={qLessonId} 
+                           onChange={(e) => setQLessonId(e.target.value)}
+                           className="w-full bg-slate-900 border border-slate-600 rounded-xl p-2.5 text-white text-sm focus:outline-none focus:border-purple-500 appearance-none font-medium shadow-inner"
+                        >
+                           <option value="general">📁 General Bank (No specific lesson)</option>
+                           {lessonBank.map(l => (
+                               <option key={l.id} value={l.id}>📘 {l.title}</option>
+                           ))}
+                        </select>
+
                         {(qType === 'mcq' || qType === 'rank') && (
                            <div className="space-y-2">
                               {qOptions.map((opt, i) => (
@@ -1095,9 +1121,22 @@ function TeacherView({ user, roomCode }) {
                                <p className="text-slate-500 text-xs italic text-center mt-4">Save presentations here for instant access.</p>
                             ) : (
                                lessonBank.map((l) => (
-                                  <div key={l.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
-                                     <span className="font-medium text-white text-sm leading-snug break-words">{l.title}</span>
-                                     <div className="flex gap-2 mt-1">
+                                  <div key={l.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-3 group hover:border-slate-500 transition-colors">
+                                     <div className="flex items-center gap-3 overflow-hidden">
+                                        <div className="w-16 h-10 bg-black rounded-md overflow-hidden relative flex-shrink-0 border border-slate-600">
+                                           {parseMediaUrl(l.url, 1)?.type === 'iframe' ? (
+                                              <div className="absolute top-0 left-0 w-[400%] h-[400%] origin-top-left scale-[0.25] pointer-events-none bg-white">
+                                                  <iframe src={parseMediaUrl(l.url, 1).src} className="w-full h-full border-0" loading="lazy" />
+                                              </div>
+                                           ) : parseMediaUrl(l.url, 1)?.type === 'image' ? (
+                                              <img src={parseMediaUrl(l.url, 1).src} className="w-full h-full object-cover" />
+                                           ) : (
+                                              <div className="w-full h-full flex items-center justify-center text-[8px] text-slate-500">Preview</div>
+                                           )}
+                                        </div>
+                                        <span className="font-medium text-white text-sm leading-snug break-words flex-1">{l.title}</span>
+                                     </div>
+                                     <div className="flex gap-2">
                                         <button 
                                            onClick={() => pushSlide(l.url)}
                                            className="flex-1 bg-purple-600 hover:bg-purple-500 text-white py-1.5 rounded-lg font-bold text-xs transition-colors shadow-md active:scale-95 flex items-center justify-center gap-1"
@@ -1130,18 +1169,34 @@ function TeacherView({ user, roomCode }) {
                             {questionBank.length === 0 ? (
                                <p className="text-slate-500 text-xs italic text-center mt-4">Questions saved here permanently sync to your account.</p>
                             ) : (
-                               questionBank.map((q) => (
-                                  <div key={q.id} className="bg-slate-800 p-3 rounded-xl border border-slate-600 shadow-sm flex flex-col gap-2 group hover:border-slate-500 transition-colors">
-                                     <div className="flex justify-between items-start gap-2">
-                                        <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
-                                        <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 whitespace-nowrap uppercase font-bold tracking-wider">
-                                           {q.type === 'mcq' && 'MCQ'}
-                                           {q.type === 'short_answer' && 'Short'}
-                                           {q.type === 'word_cloud' && 'Cloud'}
-                                           {q.type === 'thumbs' && 'Poll'}
-                                           {q.type === 'temperature' && 'Temp'}
-                                           {q.type === 'rank' && 'Rank'}
-                                        </span>
+                               [...questionBank].sort((a, b) => {
+                                  const activeLesson = lessonBank.find(l => activeSlide && l.url === activeSlide.url);
+                                  if (activeLesson) {
+                                      if (a.lessonId === activeLesson.id && b.lessonId !== activeLesson.id) return -1;
+                                      if (a.lessonId !== activeLesson.id && b.lessonId === activeLesson.id) return 1;
+                                  }
+                                  return 0;
+                               }).map((q) => {
+                                  const linkedLesson = lessonBank.find(l => l.id === q.lessonId);
+                                  return (
+                                  <div key={q.id} className={`bg-slate-800 p-3 rounded-xl border shadow-sm flex flex-col gap-2 group transition-colors ${linkedLesson && activeSlide && linkedLesson.url === activeSlide.url ? 'border-emerald-500/50 bg-slate-800/80' : 'border-slate-600 hover:border-slate-500'}`}>
+                                     <div className="flex flex-col gap-2">
+                                        <div className="flex justify-between items-start gap-2">
+                                           <span className="font-medium text-white text-sm leading-snug">{q.text}</span>
+                                           <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 whitespace-nowrap uppercase font-bold tracking-wider flex-shrink-0">
+                                              {q.type === 'mcq' && 'MCQ'}
+                                              {q.type === 'short_answer' && 'Short'}
+                                              {q.type === 'word_cloud' && 'Cloud'}
+                                              {q.type === 'thumbs' && 'Poll'}
+                                              {q.type === 'temperature' && 'Temp'}
+                                              {q.type === 'rank' && 'Rank'}
+                                           </span>
+                                        </div>
+                                        {linkedLesson && (
+                                           <span className="text-[10px] px-2 py-0.5 bg-purple-900/50 text-purple-300 rounded-full whitespace-nowrap uppercase font-bold tracking-wider truncate w-fit max-w-full border border-purple-700/50">
+                                              📘 {linkedLesson.title}
+                                           </span>
+                                        )}
                                      </div>
                                      <div className="flex gap-2 mt-1">
                                         <button 
@@ -1158,7 +1213,8 @@ function TeacherView({ user, roomCode }) {
                                         </button>
                                      </div>
                                   </div>
-                               ))
+                                  );
+                               })
                             )}
                          </div>
                      </div>
